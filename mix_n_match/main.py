@@ -11,20 +11,37 @@ logger = logging.getLogger(__file__)
 SUPPORTED_BOUNDARIES = {"left", "right"}
 
 
+# TODO this is resample, need to add check that makes sure time column is
+# indeed a datetime (or date?? check polars types!)
+# TODO make sure all target columns are valid for aggregation!
+
+# TODO add multi group by support
+
+SUPPORTED_RESAMPLING_OPERATIONS = {
+    "sum": "sum",
+    "max": "max",
+    "min": "min",
+    "mean": "mean",
+}
+# TODO need to extend this to allow some default operations...
+# will need to modify code!
+
+
+# If no target cols provided, tries to apply to all!
 class ResampleData(BaseEstimator, TransformerMixin):
     def __init__(
         self,
-        time_column,
-        resampling_frequency,  # how to do for multiple items? Need to allow
-        # support for this!
-        resampling_function,
+        time_column: str,
+        resampling_frequency: str,
+        resampling_function: list[str] | str | list[dict],
+        target_columns: list[str] | None = None,
         closed_boundaries: str = "left",
         manual_offset: str | None = None,
     ):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
-        self.resampling_function = resampling_function
         self.manual_offset = manual_offset
+        self.target_columns = target_columns
 
         if closed_boundaries not in SUPPORTED_BOUNDARIES:
             msg = (
@@ -35,7 +52,68 @@ class ResampleData(BaseEstimator, TransformerMixin):
             raise ValueError(msg)
         self.closed_boundaries = closed_boundaries
 
+        if isinstance(resampling_function, str):
+            resampling_function = [resampling_function]
+
+        if isinstance(resampling_function[0], dict):
+            self._check_resampling_function_names_unique(resampling_function)
+        else:
+            resampling_function = (
+                self._convert_resampling_function_to_record_format(
+                    resampling_function
+                )
+            )
+
+        self.resampling_function = resampling_function
+
+    def _convert_resampling_function_to_record_format(
+        self, resampling_functions: list[str]
+    ):
+        resampling_function_list = []
+        for resampling_function in resampling_functions:
+            resampling_function_list.append({"name": resampling_function})
+
+        return resampling_function_list
+
+    def _check_resampling_function_names_unique(self, resampling_functions):
+        unique_func_names = set()
+        num_functions = len(resampling_functions)
+        for function_id, resampling_function in enumerate(
+            resampling_functions
+        ):
+            func_identifier = resampling_function.get("name")
+            if func_identifier is None:
+                msg = (
+                    f"Function {function_id+1}/{num_functions} does not have "
+                    "key `name`"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+
+            if func_identifier in unique_func_names:
+                msg = (
+                    f"Function {function_id+1}/{num_functions} defines `func` "
+                    f"as `{func_identifier}` but this already exists in inputs"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+
+            unique_func_names.add(func_identifier)
+
+            func_callable = resampling_function.get("func")
+            if func_callable is None:
+                if func_identifier not in SUPPORTED_RESAMPLING_OPERATIONS:
+                    msg = (
+                        f"Function {function_id+1}/{num_functions} with `name`"
+                        f" `{func_identifier}` is not a default supported "
+                        "operation and does not have key `func`"
+                    )
+                    logger.error(msg)
+                    raise ValueError(msg)
+
     def _groupby(self, X):
+        # TODO add sorting support for group by with the "by" key, e.g. sort
+        # the time WITHIN a group!
         X = X.sort(self.time_column)
 
         if self.manual_offset:
@@ -76,11 +154,41 @@ class ResampleData(BaseEstimator, TransformerMixin):
         pass
 
     def transform(self, X):
+        # validation on the target functions!
+        if self.target_columns is None:
+            target_columns = set(X.columns)
+            target_columns.remove(self.time_column)
+            target_columns = list(target_columns)
+
         # -- sorting is necessary
         groupby_obj = self._groupby(X)
         # for item in groupby_obj:
         #    print(item)
-        df_agg = groupby_obj.agg(pl.col("values").sum())
+        agg_func_list = []
+        multiple_resampling_functions = len(self.resampling_function) > 1
+        for target_column in target_columns:
+            for resampling_function_metadata in self.resampling_function:
+                func_name = resampling_function_metadata["name"]
+                print(func_name)
+                # TODO add support for arguments to these, e.g.
+                # "sum with truncation" if these are native!
+                target_column_obj = pl.col(target_column)
+                if func_name in SUPPORTED_RESAMPLING_OPERATIONS:
+                    agg_func = getattr(target_column_obj, func_name)()
+                    if multiple_resampling_functions:
+                        agg_func = agg_func.alias(
+                            f"{target_column}_{func_name}"
+                        )
+                else:
+                    raise NotImplementedError(
+                        (
+                            "no support for custom functions yet... need to "
+                            "learn how this is done with polars natively!"
+                        )
+                    )
+
+                agg_func_list.append(agg_func)
+        df_agg = groupby_obj.agg(agg_func_list)
 
         print(df_agg)
 
@@ -150,7 +258,9 @@ if __name__ == "__main__":
         }
     )
     print(df_expected)
-    processor = ResampleData("date", "1d", None, "left")
+    processor = ResampleData(
+        "date", "1d", ["sum", "max", "min", "mean"], None, "left"
+    )
     processor.transform(df)
 
     print(df.to_pandas().to_string())

@@ -29,16 +29,29 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 
 # If no target cols provided, tries to apply to all!
 class ResampleData(BaseEstimator, TransformerMixin):
-    """Abstraction over polars groupby_dynamic method to enable timeseries resampling
+    """Abstraction over polars groupby_dynamic method to enable timeseries
+    resampling.
 
     :param time_column: column to use for resampling
     :param resampling_frequency: defines frequency of bin windows
     :param resampling_function: how to resample each bin
-    :param target_columns: which columns to use for resamplng. If not provided, resamples all columns. Defaults to `None`
-    :param closed_boundaries: which boundaries are inclusive. E.g. if `left` on daily resample, then [2021-01-01, 2021-01-02)
-    :param labelling_strategy: which boundary to use for the label. E.g. if `right` with closed_boundaries='left', then for [2021-01-01, 2021-01-02) takes the value of 2021-01-01 but returns the output as belonging to 2021-01-02, Example use case: number of items sold on the day before (e.g. up to a certain date, but not including)
-    :param start_window_offset: offset the data by a certain amount. This is for cases where you want to manually define a `start` of a specific bin. For example, offsetting by -6h on a daily resampling indicates that you want to start counting from 6 am onwards as the start of the day. Defaults to `None`
+    :param target_columns: which columns to use for resamplng. If not
+        provided, resamples all columns. Defaults to `None`
+    :param closed_boundaries: which boundaries are inclusive. E.g. if
+        `left` on daily resample, then [2021-01-01, 2021-01-02)
+    :param labelling_strategy: which boundary to use for the label. E.g.
+        if `right` with closed_boundaries='left', then for [2021-01-01,
+        2021-01-02) takes the value of 2021-01-01 but returns the output
+        as belonging to 2021-01-02, Example use case: number of items
+        sold on the day before (e.g. up to a certain date, but not
+        including)
+    :param start_window_offset: offset the data by a certain amount.
+        This is for cases where you want to manually define a `start` of
+        a specific bin. For example, offsetting by -6h on a daily
+        resampling indicates that you want to start counting from 6 am
+        onwards as the start of the day. Defaults to `None`
     """
+
     def __init__(
         self,
         time_column: str,
@@ -52,9 +65,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
         if start_window_offset is not None:
-            if start_window_offset.startswith('-'):
+            if start_window_offset.startswith("-"):
                 msg = (
-                    "Can only offset by a positive value. E.g. 6h offset on a 1d resample_frequency means start counting the day from 6 am"
+                    "Can only offset by a positive value. "
+                    "E.g. 6h offset on a 1d resample_frequency means start "
+                    "counting the day from 6 am"
                 )
                 logger.error(msg)
                 raise ValueError(msg)
@@ -79,9 +94,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
             logger.error(msg)
             raise ValueError(msg)
 
-        if labelling_strategy == 'first':
-            # TODO first internally by polars is calculaed based on index, add test to ensure that indeed, we get the first TIME value NOT index value
-            labelling_strategy == 'datapoint'
+        if labelling_strategy == "first":
+            # TODO first internally by polars is calculaed based on index,
+            # add test to ensure that indeed, we get the first
+            # TIME value NOT index value
+            labelling_strategy = "datapoint"
 
         self.labelling_strategy = labelling_strategy
 
@@ -223,7 +240,6 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 agg_func_list.append(agg_func)
         df_agg = groupby_obj.agg(agg_func_list)
 
-        
         return df_agg
 
     def inverse_transform(

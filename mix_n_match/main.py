@@ -9,7 +9,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 logger = logging.getLogger(__file__)
 
 SUPPORTED_BOUNDARIES = {"left", "right"}
-
+SUPPORTED_LABELS = {"left", "right", "first"}
 
 # TODO this is resample, need to add check that makes sure time column is
 # indeed a datetime (or date?? check polars types!)
@@ -29,6 +29,16 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 
 # If no target cols provided, tries to apply to all!
 class ResampleData(BaseEstimator, TransformerMixin):
+    """Abstraction over polars groupby_dynamic method to enable timeseries resampling
+
+    :param time_column: column to use for resampling
+    :param resampling_frequency: defines frequency of bin windows
+    :param resampling_function: how to resample each bin
+    :param target_columns: which columns to use for resamplng. If not provided, resamples all columns. Defaults to `None`
+    :param closed_boundaries: which boundaries are inclusive. E.g. if `left` on daily resample, then [2021-01-01, 2021-01-02)
+    :param labelling_strategy: which boundary to use for the label. E.g. if `right` with closed_boundaries='left', then for [2021-01-01, 2021-01-02) takes the value of 2021-01-01 but returns the output as belonging to 2021-01-02, Example use case: number of items sold on the day before (e.g. up to a certain date, but not including)
+    :param start_window_offset: offset the data by a certain amount. This is for cases where you want to manually define a `start` of a specific bin. For example, offsetting by -6h on a daily resampling indicates that you want to start counting from 6 am onwards as the start of the day. Defaults to `None`
+    """
     def __init__(
         self,
         time_column: str,
@@ -36,11 +46,20 @@ class ResampleData(BaseEstimator, TransformerMixin):
         resampling_function: list[str] | str | list[dict],
         target_columns: list[str] | None = None,
         closed_boundaries: str = "left",
-        manual_offset: str | None = None,
+        labelling_strategy: str = "left",
+        start_window_offset: str | None = None,
     ):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
-        self.manual_offset = manual_offset
+        if start_window_offset is not None:
+            if start_window_offset.startswith('-'):
+                msg = (
+                    "Can only offset by a positive value. E.g. 6h offset on a 1d resample_frequency means start counting the day from 6 am"
+                )
+                logger.error(msg)
+                raise ValueError(msg)
+            start_window_offset = f"-{start_window_offset}"
+        self.start_window_offset = start_window_offset
         self.target_columns = target_columns
 
         if closed_boundaries not in SUPPORTED_BOUNDARIES:
@@ -51,6 +70,20 @@ class ResampleData(BaseEstimator, TransformerMixin):
             logger.error(msg)
             raise ValueError(msg)
         self.closed_boundaries = closed_boundaries
+
+        if labelling_strategy not in SUPPORTED_LABELS:
+            msg = (
+                "ResampleData only supports the following labelling strategies: "
+                f"{sorted(SUPPORTED_LABELS)}"
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        if labelling_strategy == 'first':
+            # TODO first internally by polars is calculaed based on index, add test to ensure that indeed, we get the first TIME value NOT index value
+            labelling_strategy == 'datapoint'
+
+        self.labelling_strategy = labelling_strategy
 
         if isinstance(resampling_function, str):
             resampling_function = [resampling_function]
@@ -116,15 +149,15 @@ class ResampleData(BaseEstimator, TransformerMixin):
         # the time WITHIN a group!
         X = X.sort(self.time_column)
 
-        if self.manual_offset:
+        if self.start_window_offset:
             logger.info(
-                f"Detected offset... applying offset={self.manual_offset}"
+                f"Detected offset... applying offset={self.start_window_offset}"
             )
             X = X.with_columns(
-                pl.col(self.time_column).dt.offset_by(self.manual_offset)
+                pl.col(self.time_column).dt.offset_by(self.start_window_offset)
             )
 
-        groupby_obj = X.groupby_dynamic(
+        groupby_obj = X.group_by_dynamic(
             self.time_column,
             every=self.resampling_frequency,
             # period="6h",  # if you give a period, for each "every", end date
@@ -135,11 +168,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
             # lose some data because it filters your data if ourside the start
             # boundary!
             check_sorted=False,
-            truncate=True,
             include_boundaries=True,
             closed=self.closed_boundaries,  # how to treat values at the
             # boundaries. Also affects the boundarties themselves.
             # If left, starts looking at [left, )
+            label=self.labelling_strategy,
             start_by="window",
         )
 
@@ -190,7 +223,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 agg_func_list.append(agg_func)
         df_agg = groupby_obj.agg(agg_func_list)
 
-        print(df_agg)
+        
+        return df_agg
 
     def inverse_transform(
         self,

@@ -2,14 +2,45 @@
 # -- I guess we won't allow rename perse, resampling function if string will
 # apply to all target cols that behave, unless specified otherwise
 import logging
+from enum import Enum
 
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
+
+from mix_n_match.utils import detect_timeseries_frequency
 
 logger = logging.getLogger(__file__)
 
 SUPPORTED_BOUNDARIES = {"left", "right"}
 SUPPORTED_LABELS = {"left", "right", "first"}
+
+
+class PartialDataResolutionStrategy(str, Enum):
+    """Strategy on how to deal with partial data in a resampling window Partial
+    data is when a resampling window (e.g. day) does not have enough points of
+    a specific frequency for it to be considered complete. E.g. in a day, if I
+    have 5 minute samples, I would expect 288 points (at least, to account for
+    duplicates)
+
+    `KEEP`: ignore the presence of partial `DROP`: drop resampled
+    timestamps where partial data is present `NULL`: set all values for
+    timestamps with partial data to null `FAIL`: fail if any partial
+    data is detected
+    """
+
+    KEEP = "keep"
+    DROP = "drop"
+    NULL = "null"
+    FAIL = "fail"
+
+    @classmethod
+    def has_value(cls, value):
+        return value in cls._value2member_map_
+
+    @classmethod
+    def supported_values(cls):
+        return sorted(cls._value2member_map_.keys())
+
 
 # TODO this is resample, need to add check that makes sure time column is
 # indeed a datetime (or date?? check polars types!)
@@ -25,6 +56,8 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
     "count": "count",
     "collect": None,
 }
+
+
 # TODO need to extend this to allow some default operations...
 # will need to modify code!
 
@@ -53,6 +86,66 @@ class ResampleData(BaseEstimator, TransformerMixin):
         resampling indicates that you want to start counting from 6 am
         onwards as the start of the day. Defaults to `None`
     """
+
+    def __init__(
+        self,
+        time_column: str,
+        resampling_frequency: str,
+        resampling_function: list[str] | str | list[dict],
+        target_columns: list[str] | None = None,
+        closed_boundaries: str = "left",
+        labelling_strategy: str = "left",
+        start_window_offset: str
+        | None = None,  # For a day, offset by a few hours. For an hour,
+        # offset my minutes, for a minute by seconds. For a month, by a
+        # few days (although this use case doesn't make that much sense),
+        # for a month, by a few weeks (this makes more sense! Though need to
+        # see how weeks will be calculated, maybe should be a 7 day offset??)
+        # This needs further exploration and testing... at the momnet you can
+        # only guarantee that it works for daily with NO timezone!
+        # TODO add parameter to return the date as offset by the
+        # start_window_offset!
+        truncate_window: str | None = None,
+        partial_data_resolution_strategy: PartialDataResolutionStrategy = "keep",
+    ):
+        self.time_column = time_column
+        self.resampling_frequency = resampling_frequency
+
+        self._set_start_window_offset(start_window_offset)
+        self.target_columns = target_columns
+
+        self._set_closed_boundaries(closed_boundaries)
+
+        self._set_labelling_strategy(labelling_strategy)
+
+        if isinstance(resampling_function, str):
+            resampling_function = [resampling_function]
+
+        if isinstance(resampling_function[0], dict):
+            self._check_resampling_function_names_unique(resampling_function)
+        else:
+            resampling_function = (
+                self._convert_resampling_function_to_record_format(
+                    resampling_function
+                )
+            )
+
+        self.resampling_function = resampling_function
+        self.truncate_window = truncate_window
+
+        if not PartialDataResolutionStrategy.has_value(
+            partial_data_resolution_strategy
+        ):
+            raise ValueError(
+                (
+                    "`partial_data_resolution_strategy` must be one of "
+                    f"{PartialDataResolutionStrategy.supported_values()}"
+                )
+            )
+
+        self.partial_data_resolution_strategy = (
+            partial_data_resolution_strategy
+        )
 
     def _set_start_window_offset(self, start_window_offset):
         if start_window_offset is not None:
@@ -93,53 +186,6 @@ class ResampleData(BaseEstimator, TransformerMixin):
             labelling_strategy = "datapoint"
 
         self.labelling_strategy = labelling_strategy
-
-    def __init__(
-        self,
-        time_column: str,
-        resampling_frequency: str,
-        resampling_function: list[str] | str | list[dict],
-        target_columns: list[str] | None = None,
-        closed_boundaries: str = "left",
-        labelling_strategy: str = "left",
-        start_window_offset: str
-        | None = None,  # For a day, offset by a few hours. For an hour,
-        # offset my minutes, for a minute by seconds. For a month, by a
-        # few days (although this use case doesn't make that much sense),
-        # for a month, by a few weeks (this makes more sense! Though need to
-        # see how weeks will be calculated, maybe should be a 7 day offset??)
-        # This needs further exploration and testing... at the momnet you can
-        # only guarantee that it works for daily with NO timezone!
-        # TODO add parameter to return the date as offset by the
-        # start_window_offset!
-        truncate_window: str | None = None,
-        partial_data_resolution_strategy: str = "ignore",  # keep,
-        # drop, null, fail
-    ):
-        self.time_column = time_column
-        self.resampling_frequency = resampling_frequency
-
-        self._set_start_window_offset(start_window_offset)
-        self.target_columns = target_columns
-
-        self._set_closed_boundaries(closed_boundaries)
-
-        self._set_labelling_strategy(labelling_strategy)
-
-        if isinstance(resampling_function, str):
-            resampling_function = [resampling_function]
-
-        if isinstance(resampling_function[0], dict):
-            self._check_resampling_function_names_unique(resampling_function)
-        else:
-            resampling_function = (
-                self._convert_resampling_function_to_record_format(
-                    resampling_function
-                )
-            )
-
-        self.resampling_function = resampling_function
-        self.truncate_window = truncate_window
 
     def _convert_resampling_function_to_record_format(
         self, resampling_functions: list[str]
@@ -283,11 +329,75 @@ class ResampleData(BaseEstimator, TransformerMixin):
 
                 agg_func_list.append(agg_func)
 
-        # agg_func_list.append(
-        #   pl.col(self.time_column).count().alias("_count")
-        # )  # For partial conflict resolutio
+        if (
+            self.partial_data_resolution_strategy
+            != PartialDataResolutionStrategy.KEEP
+        ):
+            agg_func_list.append(
+                pl.col(self.time_column).count().alias("_count")
+            )
+
         df_agg = groupby_obj.agg(agg_func_list)
 
+        # TODO algorithm is naive, since the presence of duplicates could
+        # trick it
+        # A better solution would be to `collect`, and then apply a
+        # diff on tbe collected
+        # ones with the expected timeseries range. This will make
+        #  it slow though
+        if (
+            self.partial_data_resolution_strategy
+            != PartialDataResolutionStrategy.KEEP
+        ):
+            frequency = detect_timeseries_frequency(
+                X, self.time_column, "mode"
+            )
+
+            df_agg = df_agg.with_columns(
+                pl.col("_upper_boundary")
+                .sub(pl.col("_lower_boundary"))
+                .alias("_date_diff")
+                .dt.seconds()
+                .truediv(frequency)
+            )
+
+            df_agg = df_agg.with_columns(
+                pl.col("_count").lt(pl.col("_date_diff")).alias("_is_partial")
+            )
+
+            match self.partial_data_resolution_strategy:
+                case PartialDataResolutionStrategy.FAIL:
+                    if df_agg["_is_partial"].any():
+                        _supported_values = sorted(
+                            value
+                            for value in (
+                                PartialDataResolutionStrategy.supported_values()
+                            )
+                            if value != PartialDataResolutionStrategy.FAIL
+                        )
+                        raise ValueError(
+                            (
+                                "Detected partial data. If you wish to "
+                                "proceed then set your "
+                                "`partial_data_resolution_strategy` "
+                                f"to one of {_supported_values}"
+                            )
+                        )
+                case PartialDataResolutionStrategy.DROP:
+                    df_agg = df_agg.filter(~pl.col("_is_partial"))
+                case PartialDataResolutionStrategy.NULL:
+                    columns_to_set_to_null = [
+                        col
+                        for col in df_agg.columns
+                        if not col.startswith("_") and col != "date"
+                    ]
+                    df_agg = df_agg.with_columns(
+                        [
+                            pl.when(~pl.col("_is_partial"))
+                            .then(pl.col(columns_to_set_to_null))
+                            .keep_name()
+                        ]
+                    )
         return df_agg
 
     def inverse_transform(
@@ -335,9 +445,33 @@ if __name__ == "__main__":
             ],
         }
     )
+
     df = df.with_columns(
         pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
     )
+
+    print(
+        ResampleData(
+            "date",
+            "1d",
+            ["sum", "max"],
+            partial_data_resolution_strategy="null",
+        ).transform(df)
+    )
+    raise Exception()
+
+    df = pl.DataFrame(
+        {
+            "date": ["2021-12-31 00:00:00", "2021-12-31 00:00:01"],
+            "values": [400000000, 90000000000],
+        }
+    )
+
+    df = df.with_columns(
+        pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+    )
+    print(detect_timeseries_frequency(df, "date", "max"))
+    raise Exception()
     print("expects this:")
     df_expected = pl.DataFrame(
         {

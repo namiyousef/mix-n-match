@@ -26,7 +26,7 @@ def detect_timeseries_frequency(
         )
 
     diff = df.select(pl.col(time_column).diff(null_behavior="drop"))
-    frequency = getattr(diff, frequency_detector)()
+    frequency = getattr(diff[time_column], frequency_detector)()
 
     if how == "exact":
         num_unique_frequencies = len(frequency)

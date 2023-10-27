@@ -350,6 +350,97 @@ class TestResample(unittest.TestCase):
             df_expected[["date", "values"]], df_transformed[["date", "values"]]
         )
 
+        # -- test against partial data
+        dataframe = _prepare_dataframe(
+            [
+                "2021-03-28 00:00:00",
+                "2021-03-28 01:00:00",  # Note: 02:00:00 does not exist cos
+                # of daylight savings. We actually have 23 hours!
+                "2021-03-28 03:00:00",
+                "2021-03-28 04:00:00",
+                "2021-03-28 05:00:00",
+                "2021-03-28 06:00:00",
+                "2021-03-28 07:00:00",
+                "2021-03-28 08:00:00",
+                "2021-03-28 09:00:00",
+                "2021-03-28 10:00:00",
+                "2021-03-28 11:00:00",
+                "2021-03-28 12:00:00",
+                "2021-03-28 13:00:00",
+                "2021-03-28 14:00:00",
+                "2021-03-28 15:00:00",
+                "2021-03-28 16:00:00",
+                "2021-03-28 17:00:00",
+                "2021-03-28 18:00:00",
+                "2021-03-28 19:00:00",
+                "2021-03-28 20:00:00",
+                "2021-03-28 21:00:00",
+                "2021-03-28 22:00:00",
+                "2021-03-28 23:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+            "Europe/Brussels",
+        )
+
+        # -- test that 23 days does not fail!
+        processor = ResampleData(
+            "date", "1d", "sum", partial_data_resolution_strategy="fail"
+        )
+
+        df_transformed_1 = processor.transform(dataframe)
+
+        # -- test that offset does not affect it either!
+        dataframe = _prepare_dataframe(
+            [
+                "2021-03-28 01:00:00",  # Note: 02:00:00 does not
+                # exist cos of daylight savings. We actually have 23 hours!
+                "2021-03-28 03:00:00",
+                "2021-03-28 04:00:00",
+                "2021-03-28 05:00:00",
+                "2021-03-28 06:00:00",
+                "2021-03-28 07:00:00",
+                "2021-03-28 08:00:00",
+                "2021-03-28 09:00:00",
+                "2021-03-28 10:00:00",
+                "2021-03-28 11:00:00",
+                "2021-03-28 12:00:00",
+                "2021-03-28 13:00:00",
+                "2021-03-28 14:00:00",
+                "2021-03-28 15:00:00",
+                "2021-03-28 16:00:00",
+                "2021-03-28 17:00:00",
+                "2021-03-28 18:00:00",
+                "2021-03-28 19:00:00",
+                "2021-03-28 20:00:00",
+                "2021-03-28 21:00:00",
+                "2021-03-28 22:00:00",
+                "2021-03-28 23:00:00",
+                "2021-03-29 00:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+            "Europe/Brussels",
+        )
+
+        processor = ResampleData(
+            "date",
+            "1d",
+            "sum",
+            partial_data_resolution_strategy="fail",
+            start_window_offset="1h",
+        )
+
+        df_transformed_2 = processor.transform(dataframe)
+
+        assert_frame_equal(df_transformed_1, df_transformed_2)
+
+        processor = ResampleData(
+            "date",
+            "1d",
+            "sum",
+            partial_data_resolution_strategy="rts",
+            start_window_offset="1h",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

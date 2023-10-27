@@ -85,6 +85,9 @@ class ResampleData(BaseEstimator, TransformerMixin):
         a specific bin. For example, offsetting by -6h on a daily
         resampling indicates that you want to start counting from 6 am
         onwards as the start of the day. Defaults to `None`
+    :param partial_data_resolution_strategy: how to deal if you only
+        have partial data in a resampling window. See
+        `PartialDataResolutionStrategy` enum for info
     """
 
     def __init__(

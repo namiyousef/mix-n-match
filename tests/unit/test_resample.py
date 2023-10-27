@@ -433,14 +433,6 @@ class TestResample(unittest.TestCase):
 
         assert_frame_equal(df_transformed_1, df_transformed_2)
 
-        processor = ResampleData(
-            "date",
-            "1d",
-            "sum",
-            partial_data_resolution_strategy="rts",
-            start_window_offset="1h",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

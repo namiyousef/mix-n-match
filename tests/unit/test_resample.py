@@ -7,6 +7,29 @@ from polars.testing import assert_frame_equal
 
 from mix_n_match.main import ResampleData
 
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def _prepare_dataframe(timestamps, date_fmt, timezone=None):
+    timestamps_in_epoch_time = [
+        int(datetime.datetime.strptime(timestamp, date_fmt).strftime("%s"))
+        for timestamp in timestamps
+    ]
+    dataframe = pl.DataFrame(
+        {
+            "timestamp_string": timestamps,
+            "date": timestamps,
+            "values": timestamps_in_epoch_time,
+        }
+    ).with_columns(pl.col("date").str.strptime(pl.Datetime, date_fmt))
+
+    if timezone is not None:
+        dataframe = dataframe.with_columns(
+            [pl.col("date").dt.replace_time_zone(timezone)]
+        )
+
+    return dataframe
+
 
 class TestResample(unittest.TestCase):
     @classmethod
@@ -265,6 +288,63 @@ class TestResample(unittest.TestCase):
         ).with_columns(
             pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
         )
+
+        assert_frame_equal(
+            df_expected[["date", "values"]], df_transformed[["date", "values"]]
+        )
+
+        # -- test that 24 hour resampling freq same as daily
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01",
+                "2023-01-02",
+                "2023-01-03",
+                "2023-02-01",
+                "2023-02-02",
+            ],
+            "%Y-%m-%d",
+        )
+        processor = ResampleData(
+            "date",
+            "1mo",
+            "sum",
+            start_window_offset="1d",  # e.g. start on the second day of each month
+        )
+        df_expected = pl.DataFrame(
+            {
+                "date": [
+                    "2022-12-01",
+                    "2023-01-01",
+                    "2023-02-01",
+                ],
+                "values": [
+                    _filter_dataframe(
+                        dataframe,
+                        "timestamp_string",
+                        [
+                            "2023-01-01",
+                        ],
+                    )["values"].sum(),
+                    _filter_dataframe(
+                        dataframe,
+                        "timestamp_string",
+                        [
+                            "2023-01-02",
+                            "2023-01-03",
+                            "2023-02-01",
+                        ],
+                    )["values"].sum(),
+                    _filter_dataframe(
+                        dataframe,
+                        "timestamp_string",
+                        [
+                            "2023-02-02",
+                        ],
+                    )["values"].sum(),
+                ],
+            }
+        ).with_columns(pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d"))
+        df_transformed = processor.transform(dataframe)
 
         assert_frame_equal(
             df_expected[["date", "values"]], df_transformed[["date", "values"]]

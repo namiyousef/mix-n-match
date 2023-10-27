@@ -22,6 +22,8 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
     "max": "max",
     "min": "min",
     "mean": "mean",
+    "count": "count",
+    "collect": None,
 }
 # TODO need to extend this to allow some default operations...
 # will need to modify code!
@@ -52,18 +54,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
         onwards as the start of the day. Defaults to `None`
     """
 
-    def __init__(
-        self,
-        time_column: str,
-        resampling_frequency: str,
-        resampling_function: list[str] | str | list[dict],
-        target_columns: list[str] | None = None,
-        closed_boundaries: str = "left",
-        labelling_strategy: str = "left",
-        start_window_offset: str | None = None,
-    ):
-        self.time_column = time_column
-        self.resampling_frequency = resampling_frequency
+    def _set_start_window_offset(self, start_window_offset):
         if start_window_offset is not None:
             if start_window_offset.startswith("-"):
                 msg = (
@@ -75,8 +66,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 raise ValueError(msg)
             start_window_offset = f"-{start_window_offset}"
         self.start_window_offset = start_window_offset
-        self.target_columns = target_columns
 
+    def _set_closed_boundaries(self, closed_boundaries):
         if closed_boundaries not in SUPPORTED_BOUNDARIES:
             msg = (
                 "ResampleData only supports the following boundaries: "
@@ -86,10 +77,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
             raise ValueError(msg)
         self.closed_boundaries = closed_boundaries
 
+    def _set_labelling_strategy(self, labelling_strategy):
         if labelling_strategy not in SUPPORTED_LABELS:
             msg = (
-                "ResampleData only supports the following labelling strategies: "
-                f"{sorted(SUPPORTED_LABELS)}"
+                "ResampleData only supports the following "
+                f"labelling strategies: {sorted(SUPPORTED_LABELS)}"
             )
             logger.error(msg)
             raise ValueError(msg)
@@ -101,6 +93,38 @@ class ResampleData(BaseEstimator, TransformerMixin):
             labelling_strategy = "datapoint"
 
         self.labelling_strategy = labelling_strategy
+
+    def __init__(
+        self,
+        time_column: str,
+        resampling_frequency: str,
+        resampling_function: list[str] | str | list[dict],
+        target_columns: list[str] | None = None,
+        closed_boundaries: str = "left",
+        labelling_strategy: str = "left",
+        start_window_offset: str
+        | None = None,  # For a day, offset by a few hours. For an hour,
+        # offset my minutes, for a minute by seconds. For a month, by a
+        # few days (although this use case doesn't make that much sense),
+        # for a month, by a few weeks (this makes more sense! Though need to
+        # see how weeks will be calculated, maybe should be a 7 day offset??)
+        # This needs further exploration and testing... at the momnet you can
+        # only guarantee that it works for daily with NO timezone!
+        # TODO add parameter to return the date as offset by the
+        # start_window_offset!
+        truncate_window: str | None = None,
+        partial_data_resolution_strategy: str = "ignore",  # keep,
+        # drop, null, fail
+    ):
+        self.time_column = time_column
+        self.resampling_frequency = resampling_frequency
+
+        self._set_start_window_offset(start_window_offset)
+        self.target_columns = target_columns
+
+        self._set_closed_boundaries(closed_boundaries)
+
+        self._set_labelling_strategy(labelling_strategy)
 
         if isinstance(resampling_function, str):
             resampling_function = [resampling_function]
@@ -115,6 +139,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             )
 
         self.resampling_function = resampling_function
+        self.truncate_window = truncate_window
 
     def _convert_resampling_function_to_record_format(
         self, resampling_functions: list[str]
@@ -164,7 +189,6 @@ class ResampleData(BaseEstimator, TransformerMixin):
     def _groupby(self, X):
         # TODO add sorting support for group by with the "by" key, e.g. sort
         # the time WITHIN a group!
-        X = X.sort(self.time_column)
 
         if self.start_window_offset:
             logger.info(
@@ -174,10 +198,28 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 pl.col(self.time_column).dt.offset_by(self.start_window_offset)
             )
 
+        X = X.sort(self.time_column)
+
+        # TODO note: start_window vs. offset. With start window,
+        # you can guarantee the start date because you are shifting by
+        # a fixed value
+        #
+        # with offset, it really depends on how the start window is calculated.
+        #  You cannot "fix" the value since
+        # subtracting it, incases of month for example would depend on the
+        # number of days in the month!
+        # it doesn't even make that much sense tbh. I dont really understand it
+        # One disiction it makes though is that when you use it, your
+        # resampling outcome might vary when you hae
+        # daylight savings etc...
+
         groupby_obj = X.group_by_dynamic(
             self.time_column,
             every=self.resampling_frequency,
-            # period="6h",  # if you give a period, for each "every", end date
+            # TODO need to have some controls on period, e.g. disallow period
+            #  exceeding size of every!
+            # period=self.truncate_window,  # if you give a period, for each
+            # "every", end date
             # becomes start_date + period
             # offset="6h",  # offset shifts how your every windows are created.
             # It modifies the start boundary by doing
@@ -219,12 +261,14 @@ class ResampleData(BaseEstimator, TransformerMixin):
         for target_column in target_columns:
             for resampling_function_metadata in self.resampling_function:
                 func_name = resampling_function_metadata["name"]
-                print(func_name)
                 # TODO add support for arguments to these, e.g.
                 # "sum with truncation" if these are native!
                 target_column_obj = pl.col(target_column)
                 if func_name in SUPPORTED_RESAMPLING_OPERATIONS:
-                    agg_func = getattr(target_column_obj, func_name)()
+                    if func_name != "collect":
+                        agg_func = getattr(target_column_obj, func_name)()
+                    else:
+                        agg_func = target_column_obj
                     if multiple_resampling_functions:
                         agg_func = agg_func.alias(
                             f"{target_column}_{func_name}"
@@ -238,6 +282,10 @@ class ResampleData(BaseEstimator, TransformerMixin):
                     )
 
                 agg_func_list.append(agg_func)
+
+        # agg_func_list.append(
+        #   pl.col(self.time_column).count().alias("_count")
+        # )  # For partial conflict resolutio
         df_agg = groupby_obj.agg(agg_func_list)
 
         return df_agg

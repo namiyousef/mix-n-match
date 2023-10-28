@@ -34,7 +34,7 @@ with open("requirements/extra.json", "r") as f:
     extras_require = json.load(f)
 
 setup(
-    name="mix_n_match",
+    name="mix-n-match",
     version=get_version("mix_n_match/__init__.py"),
     description="Package for dataframe processing",
     author="Yousef Nami",

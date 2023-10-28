@@ -276,7 +276,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
             # lose some data because it filters your data if ourside the start
             # boundary!
             check_sorted=False,
-            include_boundaries=True,
+            include_boundaries=True,  # TODO by default we dont need this tbh,
+            # but for partial check this must be set to true
             closed=self.closed_boundaries,  # how to treat values at the
             # boundaries. Also affects the boundarties themselves.
             # If left, starts looking at [left, )

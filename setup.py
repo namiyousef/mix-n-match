@@ -1,6 +1,6 @@
 import codecs
 import json
-import os.path
+import os
 
 from setuptools import find_packages, setup
 
@@ -27,10 +27,15 @@ def parse_requirements(path_to_file):
     return requirements
 
 
-public_packages = parse_requirements("requirements/public.txt")
-private_packages = parse_requirements("requirements/private.txt")
+CWD = os.getcwd()
+public = os.path.join(CWD, "requirements/public.txt")
+private = os.path.join(CWD, "requirements/private.txt")
+extras = os.path.join(CWD, "requirements/extra.json")
 
-with open("requirements/extra.json", "r") as f:
+public_packages = parse_requirements(public)
+private_packages = parse_requirements(private)
+
+with open(extras, "r") as f:
     extras_require = json.load(f)
 
 setup(

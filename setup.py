@@ -42,6 +42,7 @@ setup(
     name="mix-n-match",
     version=get_version("mix_n_match/__init__.py"),
     description="Package for dataframe processing",
+    long_description=None,
     author="Yousef Nami",
     author_email="namiyousef@hotmail.com",
     url="https://github.com/namiyousef/mix-n-match",

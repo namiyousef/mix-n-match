@@ -1,0 +1,40 @@
+# This workflow will install Python dependencies, run tests and lint with a variety of Python versions
+# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+
+# TODO need to make these actions public!
+# TODO need to revisit stragegy. As far as I understand, it is not possible to communicate between jobs. So this means that the
+# extra installation is redundant. need to think about the scope of tests to run here! If you have your service hosted somewhere then you'll
+# be able to call it directly
+name: Build Package
+
+on:
+  push:
+    branches:
+      - '*'
+      - '!main'
+  pull_request:
+    branches: [main]
+
+jobs:
+  sdk-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install .[test]
+      - name: Code Validation Stage
+        run: |
+          pre-commit run --all-files --show-diff-on-failure
+      - name: Test stage
+        run: |
+          coverage run -m pytest --verbose -rsfp tests/unit

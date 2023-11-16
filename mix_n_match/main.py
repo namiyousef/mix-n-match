@@ -88,6 +88,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
     :param partial_data_resolution_strategy: how to deal if you only
         have partial data in a resampling window. See
         `PartialDataResolutionStrategy` enum for info
+    :param group_by_columns: group by columns before resampling
     """
 
     def __init__(
@@ -110,6 +111,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
         # start_window_offset!
         truncate_window: str | None = None,
         partial_data_resolution_strategy: PartialDataResolutionStrategy = "keep",
+        group_by_columns: list | None = None,
     ):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
@@ -149,6 +151,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
         self.partial_data_resolution_strategy = (
             partial_data_resolution_strategy
         )
+
+        self.group_by_columns = group_by_columns
 
     def _set_start_window_offset(self, start_window_offset):
         if start_window_offset is not None:
@@ -283,6 +287,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             # If left, starts looking at [left, )
             label=self.labelling_strategy,
             start_by="window",
+            by=self.group_by_columns,
         )
 
         # -- start window takes a datapoint, then normalises it by "every",
@@ -300,7 +305,14 @@ class ResampleData(BaseEstimator, TransformerMixin):
         if self.target_columns is None:
             target_columns = set(X.columns)
             target_columns.remove(self.time_column)
+
+            if self.group_by_columns:
+                for column in self.group_by_columns:
+                    target_columns.remove(column)
+
             target_columns = list(target_columns)
+        else:
+            target_columns = self.target_columns
 
         # -- sorting is necessary
         groupby_obj = self._groupby(X)
@@ -462,8 +474,6 @@ if __name__ == "__main__":
             partial_data_resolution_strategy="null",
         ).transform(df)
     )
-    raise Exception()
-
     df = pl.DataFrame(
         {
             "date": ["2021-12-31 00:00:00", "2021-12-31 00:00:01"],

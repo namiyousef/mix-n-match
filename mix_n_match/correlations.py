@@ -76,9 +76,19 @@ CORRELATION_METHODS = {
     },
 }
 
+DEFAULT_ALIGNER = "join_aligner"
+
 # Alignment methods:
 # for most data, we can do joins on a column or columns
 #
+
+
+def join_aligner(df1, df2, alignment_columns, how="left"):
+    df1, df2 = pl.align_frames(df1, df2, on=alignment_columns, how=how)
+    return df1, df2
+
+
+ALIGNERS = {"join_aligner": {"callable": join_aligner}}
 
 
 class FindCorrelations:
@@ -87,14 +97,43 @@ class FindCorrelations:
     def __init__(
         self,
         target_columns: List[str] | str,
-        alignment_columns: List[str] | None = None,
+        alignment_params: dict | None = None,
         method: str = "pearson",
+        method_optional_params: dict | None = None,
     ):
         if isinstance(target_columns, str):
             target_columns = [target_columns]
 
         self.target_columns = target_columns
-        self.alignment_columns = alignment_columns
+        if alignment_params:
+            alignment_columns = alignment_params.get("alignment_columns", None)
+            if alignment_columns is None:
+                raise ValueError(
+                    (
+                        "Got `alignment_params` but no `alignment_columns`. "
+                        "Please pass `alignment_columns`"
+                    )
+                )
+
+            alignment_method = alignment_params.get("alignment_method")
+            if alignment_method is None:
+                logger.warning(
+                    (
+                        "Got `alignment_params` but no `alignment_method`. "
+                        "Setting `alignment_method` to default aligner "
+                        f"`{DEFAULT_ALIGNER}`"
+                    )
+                )
+            elif ALIGNERS.get(alignment_method) is None:
+                raise ValueError(
+                    (
+                        f"Got alignment_method `{alignment_method}` which is "
+                        f"not valid. Please choose one of: {sorted(ALIGNERS)}"
+                    )
+                )
+            alignment_params["alignment_method"] = DEFAULT_ALIGNER
+
+        self.alignment_params = alignment_params
 
         method_metadata = CORRELATION_METHODS.get(method)
         if method_metadata is None:
@@ -117,6 +156,9 @@ class FindCorrelations:
             )
         self.method = method
         self.method_metadata = method_metadata
+        if method_optional_params is None:
+            method_optional_params = {}
+        self.method_optional_params = method_optional_params
 
     # TODO this is a slow methed. Not exactly sure why but perhaps due to memory?
     # really scales up when size of dataframes increases
@@ -134,16 +176,22 @@ class FindCorrelations:
 
     def prepare_dataframes(self, dataframes):
         filter_columns = self.target_columns
-        if self.alignment_columns is not None:
-            filter_columns += self.alignment_columns
+        if self.alignment_params:
+            filter_columns += self.alignment_params["alignment_columns"]
 
         for dataframe in dataframes:
             yield dataframe.select(filter_columns)
 
     def align_dataframes(self, paired_dataframes):
+        aligner = ALIGNERS[self.alignment_params["alignment_method"]][
+            "callable"
+        ]
+        alignment_columns = self.alignment_params["alignment_columns"]
+        aligner_params = self.alignment_params.get("params", {})
+
         for indices, df1, df2 in paired_dataframes:
-            df1, df2 = pl.align_frames(
-                df1, df2, on=self.alignment_columns, how="left"
+            df1, df2 = aligner(
+                df1, df2, alignment_columns=alignment_columns, **aligner_params
             )
             yield indices, df1, df2
 
@@ -161,7 +209,7 @@ class FindCorrelations:
 
         # -- sanity checks on data
         if (
-            self.alignment_columns is None
+            not self.alignment_params
             and self.method_metadata["requires_aligned_data"]
         ):
             logger.info("Checking dataframes validity...")
@@ -189,24 +237,19 @@ class FindCorrelations:
         paired_dataframes = pair_data(dataframes)
 
         # -- align data
-        paired_dataframes = self.align_dataframes(paired_dataframes)
+        if self.alignment_params:
+            logger.info("Aligning dataframes...")
+            paired_dataframes = self.align_dataframes(paired_dataframes)
 
         correlation_matrix = {}
 
         for indices, df1, df2 in paired_dataframes:
-            # TODO make this more generalised
-            logger.info(indices)
-            if self.method in {"pearson", "spearman"}:
-                df = df1.join(
-                    df2,
-                    on=self.alignment_columns,
-                )
-                col1 = self.target_columns[0]
-                col2 = f"{col1}_right"
-                correlation = self.method_metadata["callable"](
-                    df, col1=col1, col2=col2, method=self.method, **kwargs
-                )
-            correlation_matrix[indices] = correlation
+            correlation_method = self.method_metadata["callable"]
+            correlation_value = correlation_method(
+                df1, df2, **self.method_optional_params
+            )  # TODO not working. Need to
+            # find generic way to perform correlations with polars
+            correlation_matrix[indices] = correlation_value
 
         return {
             "matrix": correlation_matrix,
@@ -255,7 +298,13 @@ if __name__ == "__main__":
     dfs = generate_tonnes_of_data(20)
     print(f"took {time.time() - s} secs to gen")
 
-    processor = FindCorrelations(["values"], alignment_columns=["date"])
+    processor = FindCorrelations(
+        ["values"],
+        alignment_params={
+            "alignment_columns": ["date"],
+            "params": {"how": "outer"},
+        },
+    )
     output = processor.calculate_correlations(
         dfs, dataframe_mapping={i: i for i in range(1000)}
     )

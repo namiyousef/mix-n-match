@@ -9,50 +9,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def pair_data(dataframes_iter):
-    dataframes_iter1, dataframes_iter2 = itertools.tee(dataframes_iter, 2)
-    for i, df1 in enumerate(dataframes_iter1):
-        dataframes_iter2, next_iter = itertools.tee(dataframes_iter2, 2)
-        for j, df2 in enumerate(dataframes_iter2):
-            yield ((i, j), df1, df2)
+def pair_data(
+    iterable: Iterable,
+    method: str = "full",
+    ignore_diagonal: bool = False,
+) -> Iterable:
+    """Function pairs items in an iterator.
 
-        dataframes_iter2 = next_iter
+    :param iterable: iterator of items to pair together
+    :param method: how to pair the data.
+        If `full`, pairs every item with every other item
+        If `lower`, pairs each item with preceeding items (lower triangle)
+        If `upper`, pairs each item with subsequent items (upper triangular)
+        defaults to `full`
+    :param ignore_diagonal: if `True`, ignores cases where the item is paired
+        with itself. Defaults to `False`
+    :yield: iterable in the form (indices, item1, item2)
 
+    Example:
+        items = iter([0, 1])
+        list(pair_data(items, method="lower", ignore_diagonal=True))
+        >>> [((0, 0), 1, 0)]
+    """
+    iterable_1, iterable_2 = itertools.tee(iterable, 2)
+    for i, item1 in enumerate(iterable_1):
+        iterable_2, next_iter = itertools.tee(iterable_2, 2)
+        for j, item2 in enumerate(iterable_2):
+            if ignore_diagonal and i == j:
+                continue
+            if method == "lower" and j > i:
+                continue
+            if method == "upper" and i > j:
+                continue
+            yield ((i, j), item1, item2)
 
-def calculate_pearson_correlation(lazy_df1, lazy_df2):
-    lazy_df = lazy_df1.join(lazy_df2, on="date")
-    return (
-        lazy_df.select(pl.corr(pl.col("values_right"), pl.col("values")))
-        .collect()
-        .item()
-    )
-
-
-def calculate_correlations(
-    dataframes, method="pearson", dataframe_mapping=None
-):
-    if dataframe_mapping is None:
-        dataframes, dataframes_iter = itertools.tee(iter(dataframes), 2)
-        dataframe_mapping = {
-            index: f"df_{index+1}" for index, _ in enumerate(dataframes_iter)
-        }
-
-    paired_dataframes = pair_data(dataframes)
-    correlation_matrix = {}
-    for indices, df1, df2 in paired_dataframes:
-        if method == "pearson":
-            correlation_matrix[indices] = calculate_pearson_correlation(
-                df1, df2
-            )
-
-    return {
-        "correlation_matrix": correlation_matrix,
-        "mapping": dataframe_mapping,
-    }
-
-
-# METHODS:
-# pearson, spearman
+        iterable_2 = next_iter
 
 
 def calculate_correlation_between_columns(lazy_df, col1, col2, method, dof=1):
@@ -74,13 +65,12 @@ def calculate_correlation_between_columns(lazy_df, col1, col2, method, dof=1):
 
 CORRELATION_METHODS = {
     "pearson": {
-        "requires_aligned_timeseries": True,
+        "requires_aligned_data": True,
         "accepts_multiple_columns": False,
         "callable": calculate_correlation_between_columns,
     },
     "spearman": {
-        "requires_aligned_timeseries": True,
-        # RENAME... need to make timeseries agnostic
+        "requires_aligned_data": True,
         "accepts_multiple_columns": False,
         "callable": calculate_correlation_between_columns,
     },
@@ -165,16 +155,14 @@ class FindCorrelations:
     ):
         if dataframe_mapping is None:
             logger.info("Creating dataframe mapping...")
-            s = time.time()
             dataframes, dataframe_mapping = self.create_dataframe_mapping(
                 dataframes
             )
-            print(time.time() - s, "for mapping")
 
         # -- sanity checks on data
         if (
             self.alignment_columns is None
-            and self.method_metadata["requires_aligned_timeseries"]
+            and self.method_metadata["requires_aligned_data"]
         ):
             logger.info("Checking dataframes validity...")
 
@@ -184,8 +172,8 @@ class FindCorrelations:
             if len(dataframe_shapes) != 1:
                 raise ValueError(
                     (
-                        f"Method `{self.method}` requires timeseries to be"
-                        "aligned but timeseries are of different shapes "
+                        f"Method `{self.method}` requires data to be"
+                        "aligned but the dataframes are of different shapes "
                         "and no alignment columns passed. "
                         "Either pass dataframes of the same shape, "
                         "or pass alignment columns"
@@ -198,22 +186,15 @@ class FindCorrelations:
 
         # -- pair dataframes together
         logger.info("Pairing dataframes...")
-        s = time.time()
         paired_dataframes = pair_data(dataframes)
-        print(time.time() - s, "to pair dfs")
 
-        # -- align timeseries
-        s = time.time()
-
+        # -- align data
         paired_dataframes = self.align_dataframes(paired_dataframes)
 
-        print(time.time() - s, "to align dfs")
-
         correlation_matrix = {}
-        s = time.time()
 
         for indices, df1, df2 in paired_dataframes:
-            # HOTFIX
+            # TODO make this more generalised
             logger.info(indices)
             if self.method in {"pearson", "spearman"}:
                 df = df1.join(
@@ -226,10 +207,9 @@ class FindCorrelations:
                     df, col1=col1, col2=col2, method=self.method, **kwargs
                 )
             correlation_matrix[indices] = correlation
-        print(time.time() - s, "to calc dfs")
 
         return {
-            "correlation_matrix": correlation_matrix,
+            "matrix": correlation_matrix,
             "mapping": dataframe_mapping,
         }
 

@@ -1,6 +1,6 @@
 import itertools
 import logging
-import time
+from functools import partial
 from typing import Dict, Iterable, List
 
 import polars as pl
@@ -46,6 +46,19 @@ def pair_data(
         iterable_2 = next_iter
 
 
+def calculate_polars_correlation(
+    df1, df2, target_column, method="pearson", dof=1
+):
+    target_column = target_column[0]
+    columns = df1.columns
+    join_cols = [col for col in columns if col != target_column]
+    df = df1.join(df2, on=join_cols)
+
+    return calculate_correlation_between_columns(
+        df, target_column, f"{target_column}_right", method, dof
+    )
+
+
 def calculate_correlation_between_columns(lazy_df, col1, col2, method, dof=1):
     return (
         lazy_df.lazy()
@@ -67,20 +80,16 @@ CORRELATION_METHODS = {
     "pearson": {
         "requires_aligned_data": True,
         "accepts_multiple_columns": False,
-        "callable": calculate_correlation_between_columns,
+        "callable": partial(calculate_polars_correlation, method="pearson"),
     },
     "spearman": {
         "requires_aligned_data": True,
         "accepts_multiple_columns": False,
-        "callable": calculate_correlation_between_columns,
+        "callable": partial(calculate_polars_correlation, method="spearman"),
     },
 }
 
 DEFAULT_ALIGNER = "join_aligner"
-
-# Alignment methods:
-# for most data, we can do joins on a column or columns
-#
 
 
 def join_aligner(df1, df2, alignment_columns, how="left"):
@@ -92,7 +101,18 @@ ALIGNERS = {"join_aligner": {"callable": join_aligner}}
 
 
 class FindCorrelations:
-    """_summary_"""
+    """Class to find correlations or distances between multiple dataframes.
+
+    :param target_columns: target columns to use for calculations
+    :param alignment_params: parameters to determine how to align
+        dataframes If empty or None, then no alignment performed. If not
+        empty, requires `alignment_columns` as a key. Can also take
+        `alignment_method` to specify method to use, and `params` to
+        override default params for `alignment_method`
+    :param method: method to use for calculation correlations
+    :param method_optional_params: optional params for `method` to override
+        defaults
+    """
 
     def __init__(
         self,
@@ -199,7 +219,6 @@ class FindCorrelations:
         self,
         dataframes: List[pl.LazyFrame] | Iterable[pl.LazyFrame],
         dataframe_mapping: Dict[int, int | str] | None = None,
-        **kwargs,
     ):
         if dataframe_mapping is None:
             logger.info("Creating dataframe mapping...")
@@ -246,73 +265,12 @@ class FindCorrelations:
         for indices, df1, df2 in paired_dataframes:
             correlation_method = self.method_metadata["callable"]
             correlation_value = correlation_method(
-                df1, df2, **self.method_optional_params
-            )  # TODO not working. Need to
-            # find generic way to perform correlations with polars
+                df1, df2, self.target_columns, **self.method_optional_params
+            )  # TODO don't likethat target columns is a required parameter
+            # tbh.. need to think of better method for future
             correlation_matrix[indices] = correlation_value
 
         return {
             "matrix": correlation_matrix,
             "mapping": dataframe_mapping,
         }
-
-
-if __name__ == "__main__":
-    df1 = pl.DataFrame(
-        {
-            "date": ["2022-01-01", "2022-01-02", "2023-02-01"],
-            "values": [1, 2, 3],
-        }
-    )
-
-    df2 = pl.DataFrame(
-        {
-            "date": ["2022-01-02", "2022-01-01", "2023-02-02"],
-            "values": [4, 5, 6],
-        }
-    )
-
-    def generate_tonnes_of_data(num_timeseries=1):
-        from datetime import date
-
-        import numpy as np
-
-        date_range = pl.date_range(
-            date(2022, 1, 1), date(2023, 1, 1), "1m", eager=True
-        )  # half a million points
-
-        multiplier = np.linspace(-1, 1, num=num_timeseries)
-        for i, m in enumerate(multiplier):
-            df = pl.DataFrame().with_columns(
-                date=date_range,
-                values=pl.lit(
-                    np.sin(
-                        np.linspace(-(10**6), 10**6, len(date_range)) - m
-                    )
-                ),
-                id=i,
-            )
-            yield df
-
-    s = time.time()
-    dfs = generate_tonnes_of_data(20)
-    print(f"took {time.time() - s} secs to gen")
-
-    processor = FindCorrelations(
-        ["values"],
-        alignment_params={
-            "alignment_columns": ["date"],
-            "params": {"how": "outer"},
-        },
-    )
-    output = processor.calculate_correlations(
-        dfs, dataframe_mapping={i: i for i in range(1000)}
-    )
-
-    df = df1.lazy().join(df2.lazy(), on="date", how="left")
-    print(df.collect())
-    print(
-        calculate_correlation_between_columns(
-            df, "values", "values_right", "pearson"
-        )
-    )

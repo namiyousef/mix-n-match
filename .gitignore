@@ -161,3 +161,6 @@ cython_debug/
 
 # venv
 venv*
+
+# data
+data/

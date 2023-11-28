@@ -357,10 +357,10 @@ def calculate_variogram(
                     (pl.col(target_col[0]) ** 2) * pl.col(_count)
                     + pl.col(_squared_sum)
                     - 2 * pl.col(target_col[0]) * pl.col(_sum)
-                )
+                ).sum()
+                / pl.col(_count).sum()
             )
-
-            gamma = 0.5 * metric.mean().collect().item()
+            gamma = 0.5 * metric.collect().item()
             gamma_values.append(gamma)
 
         variogram[direction] = gamma_values

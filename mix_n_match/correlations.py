@@ -281,13 +281,26 @@ class FindCorrelations:
 
 def calculate_variogram(
     lazy_df: pl.LazyFrame,
-    cardinal_direction: List[str],
+    cardinal_direction: Union[str, List[str]],
     number_of_lags: int,
     lag_size: Union[str, int],
     delta: Union[str, int],  # TODO add support for exact variogram
     target_col: Optional[str] = None,
     normalise: bool = True,
 ):
+    """Function to calculate variogram for a given LazyFrame. This
+    implementation is based on the Matheron metric.
+
+    :param lazy_df: input data LazyFrame
+    :param cardinal_direction: column or list of columns to calculate variogram
+        for
+    :param number_of_lags: number of lags
+    :param lag_size: distance/lag to use for determining windows
+    :param delta: tolerance to use for the windows
+    :param normalise: whether to normalise variogram value, defaults to True
+    :return: LazyFrame containing the variogram calculation for each
+        cardinal direction as well as the lags as a column `lags`
+    """
     if isinstance(cardinal_direction, str):
         cardinal_direction = [cardinal_direction]
 
@@ -295,6 +308,9 @@ def calculate_variogram(
         raise NotImplementedError(
             "There is currently no support for multiple cardinal directions"
         )
+
+    if isinstance(target_col, str):
+        target_col = [target_col]
 
     if target_col is None:
         target_col = [
@@ -309,6 +325,7 @@ def calculate_variogram(
     lag_dists = [pl_duration * lags for lags in range(1, number_of_lags + 1)]
 
     variogram = {"lags": lag_dists}
+    print(lazy_df.collect())
     target_col_variances = {
         col: lazy_df.select(pl.col(col).var()).collect().item()
         for col in target_col
@@ -336,7 +353,8 @@ def calculate_variogram(
 
             rolling_obj = lazy_df_offset.rolling(
                 offset_direction, offset="0i", period=f"{lag_dist}{delta}"
-            )
+            )  # TODO option for choosing closed="both"?
+            # TODO add exact calculation, e.g. 0 offset
 
             _sum = f"_sum_{target_col}"
             _squared_sum = f"_sum_squared_{target_col}"

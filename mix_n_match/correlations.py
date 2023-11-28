@@ -286,6 +286,7 @@ def calculate_variogram(
     lag_size: Union[str, int],
     delta: Union[str, int],  # TODO add support for exact variogram
     target_col: Optional[str] = None,
+    normalise: bool = True,
 ):
     if isinstance(cardinal_direction, str):
         cardinal_direction = [cardinal_direction]
@@ -308,6 +309,10 @@ def calculate_variogram(
     lag_dists = [pl_duration * lags for lags in range(1, number_of_lags + 1)]
 
     variogram = {"lags": lag_dists}
+    target_col_variances = {
+        col: lazy_df.select(pl.col(col).var()).collect().item()
+        for col in target_col
+    }
     for direction in cardinal_direction:
         temporal_columns = lazy_df.select(cs.temporal()).schema
         if direction not in temporal_columns:
@@ -361,6 +366,8 @@ def calculate_variogram(
                 / pl.col(_count).sum()
             )
             gamma = 0.5 * metric.collect().item()
+            if normalise:
+                gamma = gamma / target_col_variances[target_col[0]]
             gamma_values.append(gamma)
 
         variogram[direction] = gamma_values

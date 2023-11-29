@@ -1,9 +1,12 @@
 import itertools
 import logging
 from functools import partial
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Union
 
 import polars as pl
+import polars.selectors as cs
+
+from mix_n_match.utils import PolarsDuration
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -274,3 +277,144 @@ class FindCorrelations:
             "matrix": correlation_matrix,
             "mapping": dataframe_mapping,
         }
+
+
+def calculate_variogram(
+    lazy_df: pl.LazyFrame,
+    cardinal_direction: Union[str, List[str]],
+    number_of_lags: int,
+    lag_size: Union[str, int],
+    delta: Union[str, int],  # TODO add support for exact variogram
+    target_col: Optional[str] = None,
+    normalise: bool = True,
+):
+    """Function to calculate variogram for a given LazyFrame. This
+    implementation is based on the Matheron metric.
+
+    :param lazy_df: input data LazyFrame
+    :param cardinal_direction: column or list of columns to calculate variogram
+        for
+    :param number_of_lags: number of lags
+    :param lag_size: distance/lag to use for determining windows
+    :param delta: tolerance to use for the windows
+    :param normalise: whether to normalise variogram value, defaults to True
+    :return: LazyFrame containing the variogram calculation for each
+        cardinal direction as well as the lags as a column `lags`
+    """
+    if isinstance(cardinal_direction, str):
+        cardinal_direction = [cardinal_direction]
+
+    if len(cardinal_direction) > 1:
+        raise NotImplementedError(
+            "There is currently no support for multiple cardinal directions"
+        )
+
+    if isinstance(target_col, str):
+        target_col = [target_col]
+
+    if target_col is None:
+        target_col = [
+            col for col in lazy_df.columns if col not in cardinal_direction
+        ]
+
+    if len(target_col) > 1:
+        raise NotImplementedError(
+            "There is currently no support for multiple target columns"
+        )
+    pl_duration = PolarsDuration(lag_size)
+    lag_dists = [pl_duration * lags for lags in range(1, number_of_lags + 1)]
+
+    variogram = {"lags": lag_dists}
+    print(lazy_df.collect())
+    target_col_variances = {
+        col: lazy_df.select(pl.col(col).var()).collect().item()
+        for col in target_col
+    }
+    for direction in cardinal_direction:
+        temporal_columns = lazy_df.select(cs.temporal()).schema
+        if direction not in temporal_columns:
+            raise NotImplementedError(
+                "There is currently only support for temporal columns"
+            )
+
+        lazy_df = lazy_df.sort(direction)
+        gamma_values = []
+        for lag_dist in lag_dists:
+            # period = 2 * delta
+            # offset = lag_distance - delta
+
+            offset_direction = f"_{direction}"
+
+            lazy_df_offset = lazy_df.with_columns(
+                pl.col(direction)
+                .dt.offset_by(f"-{delta}")
+                .alias(offset_direction)
+            )
+
+            rolling_obj = lazy_df_offset.rolling(
+                offset_direction, offset="0i", period=f"{lag_dist}{delta}"
+            )  # TODO option for choosing closed="both"?
+            # TODO add exact calculation, e.g. 0 offset
+
+            _sum = f"_sum_{target_col}"
+            _squared_sum = f"_sum_squared_{target_col}"
+            _count = "_count"
+            expressions = [pl.col(offset_direction).count().alias(_count)]
+            for col in target_col:
+                expressions.extend(
+                    [
+                        pl.col(col).sum().alias(_sum),
+                        (pl.col(col) ** 2).sum().alias(_squared_sum),
+                    ]
+                )
+
+            agg_lazy_df = rolling_obj.agg(expressions).filter(
+                pl.col(_count) != 0
+            )
+
+            agg_lazy_df = agg_lazy_df.join(lazy_df_offset, on=offset_direction)
+
+            # TODO here need to extend support to multiple columns
+            metric = agg_lazy_df.select(
+                (
+                    (pl.col(target_col[0]) ** 2) * pl.col(_count)
+                    + pl.col(_squared_sum)
+                    - 2 * pl.col(target_col[0]) * pl.col(_sum)
+                ).sum()
+                / pl.col(_count).sum()
+            )
+            gamma = 0.5 * metric.collect().item()
+            if normalise:
+                gamma = gamma / target_col_variances[target_col[0]]
+            gamma_values.append(gamma)
+
+        variogram[direction] = gamma_values
+
+    lazy_variogram = pl.LazyFrame(variogram)
+
+    return lazy_variogram
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    path = "data/timeseries.csv"
+
+    lazy_df = (
+        pl.read_csv(path)
+        .with_columns(pl.col("Date").str.strptime(pl.Datetime))
+        .rename({"Date": "date"})
+        .lazy()
+    )
+
+    for column in lazy_df.columns:
+        if column != "date":
+            plt.plot(
+                lazy_df.select("date").collect(),
+                lazy_df.select(column).collect(),
+            )
+
+    lazy_df = calculate_variogram(lazy_df, "date", 10, "1d", "3h", "A")
+    plt.figure()
+    plt.plot(lazy_df.select(pl.col("date")).collect())
+    plt.show()

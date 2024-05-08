@@ -421,6 +421,10 @@ class TestResample(unittest.TestCase):
             "Europe/Brussels",
         )
 
+        # -- subtract an hour from each "value" so that we get the correct timestamp
+        # corresponding to the previous dataframe
+        dataframe = dataframe.with_columns(pl.col("values") - 60 * 60)
+
         processor = ResampleData(
             "date",
             "1d",

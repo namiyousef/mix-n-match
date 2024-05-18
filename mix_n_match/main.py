@@ -287,7 +287,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             # If left, starts looking at [left, )
             label=self.labelling_strategy,
             start_by="window",
-            by=self.group_by_columns,
+            group_by=self.group_by_columns,
         )
 
         # -- start window takes a datapoint, then normalises it by "every",
@@ -373,7 +373,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 pl.col("_upper_boundary")
                 .sub(pl.col("_lower_boundary"))
                 .alias("_date_diff")
-                .dt.seconds()
+                .dt.total_seconds()
                 .truediv(frequency)
             )
 

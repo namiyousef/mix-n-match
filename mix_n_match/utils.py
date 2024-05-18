@@ -171,11 +171,11 @@ def find_contiguous_segments(
     segment_end_indices = index_array[1:][non_matching_mask]
 
     segment_start_indices = np.concatenate(
-        (np.array([[0]]), segment_end_indices)
+        (index_array[:1], segment_end_indices)
     )
 
     segment_end_indices = np.concatenate(
-        (segment_end_indices, np.array([[size]]))
+        (segment_end_indices, index_array[-1:] + 1)
     )
     indices_array = np.concatenate(
         [segment_start_indices, segment_end_indices], axis=1

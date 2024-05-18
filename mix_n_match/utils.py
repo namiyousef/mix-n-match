@@ -146,7 +146,14 @@ def detect_timeseries_frequency(
     return frequency
 
 
-def find_contiguous_segments(array: np.array) -> List[List[int]]:
+# features to add:
+# only get contiguous segments of a single value
+
+
+# only get contiguous segments of a specific length
+def find_contiguous_segments(
+    array: np.array, filter_mask=None
+) -> List[List[int]]:
     """Returns a list of start, end indices to identify contiguous segments in
     an array.
 

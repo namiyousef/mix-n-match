@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+import numpy as np
 import polars as pl
 
 # NANOSECOND = 1
@@ -143,3 +144,40 @@ def detect_timeseries_frequency(
 
     frequency = frequency.item().total_seconds()
     return frequency
+
+
+def find_contiguous_segments(array: np.array) -> List[List[int]]:
+    """Returns a list of start, end indices to identify contiguous segments in
+    an array.
+
+    :param array: array
+    """
+
+    # NOTE: array should be 1-D
+    non_matching_mask = (
+        array[:-1] != array[1:]
+    )  # find mask of elements where the next element is differnet to current one
+    size = array.shape[0]
+
+    index_array = np.arange(0, size).reshape(-1, 1)
+
+    segment_end_indices = index_array[1:][non_matching_mask]
+
+    segment_start_indices = np.concatenate(
+        (np.array([[0]]), segment_end_indices)
+    )
+
+    segment_end_indices = np.concatenate(
+        (segment_end_indices, np.array([[size]]))
+    )
+    indices_array = np.concatenate(
+        [segment_start_indices, segment_end_indices], axis=1
+    )
+
+    # Not sure if I want this, but:
+    # return the actual end index
+    # indices_array[:, 1] -= 1
+
+    indices_list = indices_array.tolist()
+
+    return indices_list

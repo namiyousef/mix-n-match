@@ -31,7 +31,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          python -m pip install --no-cache-dir .[test]
+          ls
+          ls ..
+          exit 1
+          python -m pip install .[test]
       - name: Code Validation Stage
         run: |
           pre-commit run --all-files --show-diff-on-failure

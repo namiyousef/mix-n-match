@@ -353,7 +353,12 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 pl.col(self.time_column).count().alias("_count")
             )
 
+        for item in groupby_obj:
+            print("test")
+            print(item[1]["values"].to_list())
+
         df_agg = groupby_obj.agg(agg_func_list)
+        print(df_agg)
 
         # TODO algorithm is naive, since the presence of duplicates could
         # trick it

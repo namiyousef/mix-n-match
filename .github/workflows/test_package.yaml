@@ -31,10 +31,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          cat mix_n_match/main.py
           python -m venv venv
           which python
           source venv/bin/activate
+          which python
+          exit 1
           pip install .[test]
           echo PATH=$PATH >> $GITHUB_ENV
       - name: Code Validation Stage

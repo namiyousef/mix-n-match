@@ -31,7 +31,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          ls mix-n-match
           ls mix_n_match
           python -m pip install .[test]
       #- name: Code Validation Stage

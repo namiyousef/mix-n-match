@@ -32,10 +32,15 @@ jobs:
       - name: Install dependencies
         run: |
           cat mix_n_match/main.py
-          python -m pip install .[test]
-      #- name: Code Validation Stage
-      #  run: |
-      #    pre-commit run --all-files --show-diff-on-failure
+          python -m venv venv
+          which python
+          source venv/bin/activate
+          pip install .[test]
+          echo PATH=$PATH >> $GITHUB_ENV
+      - name: Code Validation Stage
+        run: |
+          which python
+          pre-commit run --all-files --show-diff-on-failure
       - name: Test stage
         run: |
           pip list

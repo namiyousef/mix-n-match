@@ -387,8 +387,6 @@ class TestResample(unittest.TestCase):
             "date", "1d", "sum", partial_data_resolution_strategy="fail"
         )
 
-        print(dataframe)
-
         df_transformed_1 = processor.transform(dataframe)
 
         # -- test that offset does not affect it either!
@@ -434,8 +432,6 @@ class TestResample(unittest.TestCase):
             partial_data_resolution_strategy="fail",
             start_window_offset="1h",
         )
-
-        print(dataframe)
 
         df_transformed_2 = processor.transform(dataframe)
 

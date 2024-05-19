@@ -354,6 +354,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             )
 
         for item in groupby_obj:
+            print("test")
             print(item)
 
         df_agg = groupby_obj.agg(agg_func_list)

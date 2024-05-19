@@ -2,6 +2,7 @@ import datetime
 import unittest
 from copy import deepcopy
 
+import dateutil
 import polars as pl
 from polars.testing import assert_frame_equal
 
@@ -12,7 +13,13 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def _prepare_dataframe(timestamps, date_fmt, timezone=None):
     timestamps_in_epoch_time = [
-        int(datetime.datetime.strptime(timestamp, date_fmt).strftime("%s"))
+        int(
+            dateutil.parser.parse(
+                f"{timestamp} UTC"
+                if date_fmt == "%Y-%m-%d %H:%M:%S"
+                else timestamp
+            ).strftime("%s")
+        )
         for timestamp in timestamps
     ]
     dataframe = pl.DataFrame(
@@ -390,7 +397,7 @@ class TestResample(unittest.TestCase):
         df_transformed_1 = processor.transform(dataframe)
 
         # -- test that offset does not affect it either!
-        dataframe = _prepare_dataframe(
+        dataframe_2 = _prepare_dataframe(
             [
                 "2021-03-28 01:00:00",  # Note: 02:00:00 does not
                 # exist cos of daylight savings. We actually have 23 hours!
@@ -421,9 +428,11 @@ class TestResample(unittest.TestCase):
             "Europe/Brussels",
         )
 
-        # -- subtract an hour from each "value" so that we get the correct timestamp
-        # corresponding to the previous dataframe
-        dataframe = dataframe.with_columns(pl.col("values") - 60 * 60)
+        # -- subtract by the diff between the two dataframes to
+        # "fix" the unique timestamp values
+        dataframe = dataframe_2.with_columns(
+            pl.col("values") - (pl.col("values") - dataframe["values"])
+        )
 
         processor = ResampleData(
             "date",

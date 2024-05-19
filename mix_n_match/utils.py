@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import List, Tuple
 
 import numpy as np
@@ -152,38 +154,50 @@ def detect_timeseries_frequency(
 
 # only get contiguous segments of a specific length
 def find_contiguous_segments(
-    array: np.array, filter_mask=None
+    array: np.array,
+    filter_mask: np.array | None,
 ) -> List[List[int]]:
     """Returns a list of start, end indices to identify contiguous segments in
     an array.
 
     :param array: array
+    :param filter_mask: boolean array of length `array` indicating which
+        elements from array to find contiguous segments for. Note that
+        the boolean array must necessarily be true/false for complete
+        contiguous segments. For example: arr = np.array([1,1,2,2]) and
+        boolean = np.array([True, False, True, False]) is invalid
     """
 
     # NOTE: array should be 1-D
     non_matching_mask = (
         array[:-1] != array[1:]
     )  # find mask of elements where the next element is differnet to current one
+
     size = array.shape[0]
 
     index_array = np.arange(0, size).reshape(-1, 1)
 
-    segment_end_indices = index_array[1:][non_matching_mask]
+    segment_end_indices = index_array[:-1][non_matching_mask]
+    segment_start_indices = index_array[1:][non_matching_mask]
 
     segment_start_indices = np.concatenate(
-        (index_array[:1], segment_end_indices)
+        (index_array[:1], segment_start_indices)
     )
 
     segment_end_indices = np.concatenate(
-        (segment_end_indices, index_array[-1:] + 1)
+        (segment_end_indices, index_array[-1:])
     )
     indices_array = np.concatenate(
         [segment_start_indices, segment_end_indices], axis=1
     )
 
-    # Not sure if I want this, but:
-    # return the actual end index
-    # indices_array[:, 1] -= 1
+    if filter_mask is not None:
+        indices_to_keep = index_array[
+            filter_mask & np.concatenate((non_matching_mask, np.array([True])))
+        ]
+        indices_array = indices_array[
+            np.isin(indices_array[:, 1], indices_to_keep)
+        ]
 
     indices_list = indices_array.tolist()
 

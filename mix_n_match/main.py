@@ -315,7 +315,6 @@ class ResampleData(BaseEstimator, TransformerMixin):
             target_columns = self.target_columns
 
         # -- sorting is necessary
-        print(X)
         groupby_obj = self._groupby(X)
         # for item in groupby_obj:
         #    print(item)
@@ -355,6 +354,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             )
 
         df_agg = groupby_obj.agg(agg_func_list)
+        print(df_agg)
 
         # TODO algorithm is naive, since the presence of duplicates could
         # trick it

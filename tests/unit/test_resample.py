@@ -446,6 +446,79 @@ class TestResample(unittest.TestCase):
 
         assert_frame_equal(df_transformed_1, df_transformed_2)
 
+    def test_resample_with_partial_data_resolution(self):
+        # -- case partial but keep row
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="keep",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed.shape[0] == 1  # no rows dropped
+
+        # -- case partial but drop row
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="drop",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed.shape[0] == 0  # row dropped since partial
+
+        # -- case partial but strategy fail
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="fail",
+        )
+
+        with self.assertRaises(ValueError):
+            transformed = processor.transform(dataframe)
+
+        # -- case partial but strategy null
+
+        _dataframe = _prepare_dataframe(
+            [
+                "2023-01-02 00:00:00",
+                "2023-01-02 06:00:00",
+                "2023-01-02 12:00:00",
+                "2023-01-02 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        dataframe = pl.concat([dataframe, _dataframe])
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="null",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed["values"].to_list() == [
+            None,
+            _dataframe["values"].sum(),
+        ]
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,8 +1,13 @@
 import unittest
 
 import numpy as np
+import polars as pl
 
-from mix_n_match.utils import PolarsDuration, find_contiguous_segments
+from mix_n_match.utils import (
+    PolarsDuration,
+    detect_timeseries_frequency,
+    find_contiguous_segments,
+)
 
 
 class TestUtils(unittest.TestCase):
@@ -92,6 +97,79 @@ class TestUtils(unittest.TestCase):
         expected_indices = [[4, 6]]
 
         assert indices == expected_indices
+
+    def test_detect_timeseries_frequency(self):
+        # -- simple case
+        df = pl.DataFrame(
+            {
+                "date": [
+                    "2023-01-01 00:45:00",
+                    "2023-01-01 00:30:00",
+                    "2023-01-01 00:15:00",
+                ],
+            }
+        ).with_columns(
+            pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+        )
+        frequency = detect_timeseries_frequency(df, time_column="date")
+
+        assert frequency == 15 * 60  # 15 mins
+
+        # -- case with missing data (gaps)
+        df = pl.DataFrame(
+            {
+                "date": [
+                    "2023-01-01 01:15:00",
+                    "2023-01-01 00:45:00",
+                    "2023-01-01 00:30:00",
+                    "2023-01-01 00:15:00",
+                ],
+            }
+        ).with_columns(
+            pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+        )
+
+        # 1: fail with mode `exact` (default)
+        with self.assertRaises(ValueError):
+            frequency = detect_timeseries_frequency(df, time_column="date")
+
+        # 2: get most frequent with mode `mode`
+        frequency = detect_timeseries_frequency(
+            df, time_column="date", how="mode"
+        )
+
+        assert frequency == 15 * 60  # 15 mins
+
+        # 3: get worst case (max) with mode `max`
+
+        frequency = detect_timeseries_frequency(
+            df, time_column="date", how="max"
+        )
+
+        assert frequency == 15 * 60 * 2  # 30 mins
+
+        # -- case with duplicated data
+        df = pl.DataFrame(
+            {
+                "date": [
+                    "2023-01-01 01:15:00",
+                    "2023-01-01 01:15:00",
+                    "2023-01-01 01:15:00",
+                    "2023-01-01 01:15:00",
+                    "2023-01-01 00:45:00",
+                    "2023-01-01 00:30:00",
+                    "2023-01-01 00:15:00",
+                ],
+            }
+        ).with_columns(
+            pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+        )
+
+        frequency = detect_timeseries_frequency(
+            df, time_column="date", how="mode"
+        )
+
+        assert frequency == 15 * 60  # 15 mins
 
 
 if __name__ == "__main__":

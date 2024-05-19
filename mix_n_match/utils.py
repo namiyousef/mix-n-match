@@ -127,7 +127,10 @@ def detect_timeseries_frequency(
             f"Expected `how` in {sorted(SUPPORTED_METHODS)}. Got `{how}`"
         )
 
-    diff = df.select(pl.col(time_column).diff(null_behavior="drop"))
+    # -- need to sort the time column, AND drop duplicates
+    diff = df.select(
+        pl.col(time_column).unique().sort().diff(null_behavior="drop")
+    )
     frequency = getattr(diff[time_column], frequency_detector)()
 
     if how == "exact":
@@ -144,8 +147,10 @@ def detect_timeseries_frequency(
                 )
             )
 
-    frequency = frequency.item().total_seconds()
-    return frequency
+    if how != "max":  # max returns Python literal, others return Series
+        frequency = frequency.item()
+
+    return frequency.total_seconds()
 
 
 # only get contiguous segments of a specific length

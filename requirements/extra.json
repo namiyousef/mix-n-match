@@ -2,6 +2,7 @@
     "test": [
         "pytest",
         "pre-commit",
-        "coverage"
+        "coverage",
+        "python-dateutil"
     ]
 }

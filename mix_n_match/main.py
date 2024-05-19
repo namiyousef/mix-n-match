@@ -316,8 +316,6 @@ class ResampleData(BaseEstimator, TransformerMixin):
 
         # -- sorting is necessary
         groupby_obj = self._groupby(X)
-        # for item in groupby_obj:
-        #    print(item)
         agg_func_list = []
         multiple_resampling_functions = len(self.resampling_function) > 1
         for target_column in target_columns:

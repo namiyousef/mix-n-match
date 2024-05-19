@@ -3,6 +3,7 @@
 # apply to all target cols that behave, unless specified otherwise
 import logging
 from enum import Enum
+from typing import Callable
 
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -62,6 +63,11 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 # will need to modify code!
 
 
+class FilterDataBasedOnTime:
+    def __init__(self):
+        pass
+
+
 # If no target cols provided, tries to apply to all!
 class ResampleData(BaseEstimator, TransformerMixin):
     """Abstraction over polars groupby_dynamic method to enable timeseries
@@ -89,6 +95,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
         have partial data in a resampling window. See
         `PartialDataResolutionStrategy` enum for info
     :param group_by_columns: group by columns before resampling
+    :param filter_data_method: method that takes a dataframe and removes
+        data from it. This is compatible with
+        `partial_data_resolution_strategy`. Any extra rows removed here
+        will not affect the logic of determining if a window contains
+        partial data
     """
 
     def __init__(
@@ -112,6 +123,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
         truncate_window: str | None = None,
         partial_data_resolution_strategy: PartialDataResolutionStrategy = "keep",
         group_by_columns: list | None = None,
+        filter_data_method: Callable[[pl.DataFrame], pl.DataFrame]
+        | None = None,
     ):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
@@ -153,6 +166,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
         )
 
         self.group_by_columns = group_by_columns
+        self.filter_data_method = filter_data_method
 
     def _set_start_window_offset(self, start_window_offset):
         if start_window_offset is not None:
@@ -297,10 +311,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
 
         return groupby_obj
 
-    def fit(self, X, y=None):
-        pass
-
-    def transform(self, X):
+    def _aggregate(self, X):
         # validation on the target functions!
         if self.target_columns is None:
             target_columns = set(X.columns)
@@ -314,8 +325,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
         else:
             target_columns = self.target_columns
 
-        # -- sorting is necessary
         groupby_obj = self._groupby(X)
+
         agg_func_list = []
         multiple_resampling_functions = len(self.resampling_function) > 1
         for target_column in target_columns:
@@ -348,11 +359,21 @@ class ResampleData(BaseEstimator, TransformerMixin):
             != PartialDataResolutionStrategy.KEEP
         ):
             agg_func_list.append(
-                pl.col(self.time_column).unique().count().alias("_count")
+                pl.col(self.time_column)
+                .unique()  # unique because we don't want duplicates to affect how we
+                # count rows for determining if we have a complete time window
+                .count()
+                .alias("_unique_timestamp_count")
             )
 
         df_agg = groupby_obj.agg(agg_func_list)
 
+        return df_agg
+
+    def fit(self, X, y=None):
+        pass
+
+    def transform(self, X):
         if (
             self.partial_data_resolution_strategy
             != PartialDataResolutionStrategy.KEEP
@@ -361,6 +382,26 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 X, self.time_column, "mode"
             )
 
+        # -- filter data, but keep information on number of rows prior to filtration
+        if self.filter_data_method is not None:
+            df_agg_non_filtered = self._groupby(X).agg(
+                [
+                    pl.col(self.time_column)
+                    .unique()
+                    .count()
+                    .alias("_unique_timestamp_count_non_filtered")
+                ]
+            )
+
+            X = self.filter_data_method(X)
+
+        # -- group by and aggregate
+        df_agg = self._aggregate(X)
+
+        if (
+            self.partial_data_resolution_strategy
+            != PartialDataResolutionStrategy.KEEP
+        ):
             df_agg = df_agg.with_columns(
                 pl.col("_upper_boundary")
                 .sub(pl.col("_lower_boundary"))
@@ -369,8 +410,18 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 .truediv(frequency)
             )
 
+            if self.filter_data_method is not None:
+                df_agg = df_agg.join(df_agg_non_filtered, on=self.time_column)
+                df_agg = df_agg.with_columns(
+                    pl.col("_unique_timestamp_count_non_filtered").alias(
+                        "_unique_timestamp_count"
+                    )
+                )
+
             df_agg = df_agg.with_columns(
-                pl.col("_count").lt(pl.col("_date_diff")).alias("_is_partial")
+                pl.col("_unique_timestamp_count")
+                .lt(pl.col("_date_diff"))
+                .alias("_is_partial")
             )
 
             match self.partial_data_resolution_strategy:
@@ -423,12 +474,19 @@ if __name__ == "__main__":
                 "2022-01-01 12:00:00",
                 "2022-01-01 18:00:00",
             ],
-            "values": [1, 1, 2, 3],
+            "values": [1, 2, 3, 4],
         }
     )
     df = df.with_columns(
         pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
     )
+
+    import datetime
+
+    def method(x):
+        return x.filter(
+            pl.col("date") != datetime.datetime(2022, 1, 1, 6, 0, 0)
+        )
 
     processor = ResampleData(
         time_column="date",
@@ -436,9 +494,12 @@ if __name__ == "__main__":
         target_columns=["values"],
         partial_data_resolution_strategy="fail",
         resampling_function="sum",
+        filter_data_method=method,
     )
 
-    processor.transform(df)
+    transformed = processor.transform(df)
+    print(transformed)
+    raise Exception()
 
     df = pl.DataFrame(
         {

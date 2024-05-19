@@ -148,7 +148,10 @@ def detect_timeseries_frequency(
             )
 
     if how != "max":  # max returns Python literal, others return Series
-        frequency = frequency.item()
+        frequency = (
+            frequency.item()
+        )  # TODO this will fail if mode has multiple values!
+        # Need to think of how to resolve this issue
 
     return frequency.total_seconds()
 

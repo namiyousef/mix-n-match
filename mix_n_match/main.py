@@ -348,17 +348,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
             != PartialDataResolutionStrategy.KEEP
         ):
             agg_func_list.append(
-                pl.col(self.time_column).count().alias("_count")
+                pl.col(self.time_column).unique().count().alias("_count")
             )
 
         df_agg = groupby_obj.agg(agg_func_list)
 
-        # TODO algorithm is naive, since the presence of duplicates could
-        # trick it
-        # A better solution would be to `collect`, and then apply a
-        # diff on tbe collected
-        # ones with the expected timeseries range. This will make
-        #  it slow though
         if (
             self.partial_data_resolution_strategy
             != PartialDataResolutionStrategy.KEEP
@@ -423,11 +417,28 @@ class ResampleData(BaseEstimator, TransformerMixin):
 if __name__ == "__main__":
     df = pl.DataFrame(
         {
-            "date": ["2022-01-01", "2022-01-02", "2023-02-01"],
-            "values": [1, 2, 3],
+            "date": [
+                "2022-01-01 06:00:00",
+                "2022-01-01 06:00:00",
+                "2022-01-01 12:00:00",
+                "2022-01-01 18:00:00",
+            ],
+            "values": [1, 1, 2, 3],
         }
     )
-    df = df.with_columns(pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d"))
+    df = df.with_columns(
+        pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+    )
+
+    processor = ResampleData(
+        time_column="date",
+        resampling_frequency="1d",
+        target_columns=["values"],
+        partial_data_resolution_strategy="fail",
+        resampling_function="sum",
+    )
+
+    processor.transform(df)
 
     df = pl.DataFrame(
         {

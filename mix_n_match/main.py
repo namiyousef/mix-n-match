@@ -315,6 +315,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
             target_columns = self.target_columns
 
         # -- sorting is necessary
+        print(X)
         groupby_obj = self._groupby(X)
         # for item in groupby_obj:
         #    print(item)

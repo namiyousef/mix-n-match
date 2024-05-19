@@ -45,6 +45,4 @@ jobs:
       #    pre-commit run --all-files --show-diff-on-failure
       - name: Test stage
         run: |
-          pip list
-          which python
           coverage run -m pytest --verbose -rsfp tests/unit

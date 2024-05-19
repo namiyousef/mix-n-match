@@ -148,14 +148,11 @@ def detect_timeseries_frequency(
     return frequency
 
 
-# features to add:
-# only get contiguous segments of a single value
-
-
 # only get contiguous segments of a specific length
 def find_contiguous_segments(
     array: np.array,
-    filter_mask: np.array | None,
+    filter_mask: np.array | None = None,
+    min_length: int | None = None,
 ) -> List[List[int]]:
     """Returns a list of start, end indices to identify contiguous segments in
     an array.
@@ -166,6 +163,7 @@ def find_contiguous_segments(
         the boolean array must necessarily be true/false for complete
         contiguous segments. For example: arr = np.array([1,1,2,2]) and
         boolean = np.array([True, False, True, False]) is invalid
+    :param min_length: only find contiguous segments of at least a specific size
     """
 
     # NOTE: array should be 1-D
@@ -198,6 +196,10 @@ def find_contiguous_segments(
         indices_array = indices_array[
             np.isin(indices_array[:, 1], indices_to_keep)
         ]
+
+    if min_length is not None:
+        segment_lengths = indices_array[:, 1] - indices_array[:, 0] + 1
+        indices_array = indices_array[segment_lengths >= min_length]
 
     indices_list = indices_array.tolist()
 

@@ -76,6 +76,23 @@ class TestUtils(unittest.TestCase):
 
         assert indices == expected_indices
 
+        # -- test min length
+        array = np.array(
+            [0, 0, 1, 1, 0, 0],
+        )
+        indices = find_contiguous_segments(array, min_length=2)
+        expected_indices = [[0, 1], [2, 3], [4, 5]]
+
+        assert indices == expected_indices
+
+        array = np.array(
+            [0, 0, 1, 1, 0, 0, 0],
+        )
+        indices = find_contiguous_segments(array, min_length=3)
+        expected_indices = [[4, 6]]
+
+        assert indices == expected_indices
+
 
 if __name__ == "__main__":
     unittest.main()

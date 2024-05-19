@@ -32,15 +32,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m venv venv
-          which python
           source venv/bin/activate
-          which python
-          exit 1
           pip install .[test]
+          echo $GITHUB_PATH
+          echo "venv/bin" >> $GITHUB_PATH
+          echo $GITHUB_PATH
+          echo $GITHUB_ENV
           echo PATH=$PATH >> $GITHUB_ENV
+          echo $GITHUB_ENV
+
       - name: Code Validation Stage
         run: |
           which python
+          exit 1
           pre-commit run --all-files --show-diff-on-failure
       - name: Test stage
         run: |

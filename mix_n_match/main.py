@@ -8,7 +8,7 @@ from typing import Callable
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from mix_n_match.utils import detect_timeseries_frequency
+from mix_n_match.utils import PolarsDuration, detect_timeseries_frequency
 
 logger = logging.getLogger(__file__)
 
@@ -63,9 +63,149 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 # will need to modify code!
 
 
-class FilterDataBasedOnTime:
-    def __init__(self):
+def generate_polars_condition(expressions, operator):
+    final_expression = expressions.pop()
+    for expression in expressions:
+        final_expression = getattr(final_expression, operator)(expression)
+
+    return final_expression
+
+
+class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
+    UNIT_TO_POLARS_METHOD_MAPPING = {"d": "day", "h": "hour"}
+
+    OPERATOR_TO_POLARS_METHOD_MAPPING = {
+        "=": "eq",
+        "!=": "ne",
+        "<=": "le",
+        "<": "lt",
+        ">": "gt",
+        ">=": "ge",
+    }
+
+    def __init__(self, time_column, time_patterns):
+        self.time_column = time_column
+
+        self.filtering_rules = self._parse_time_patterns_into_rules(
+            time_patterns
+        )
+
+    def fit(self, X, y=None):
         pass
+
+    def _convert_rules_to_polars_expressions(self):
+        rules = []  # list to store expressions for each rule
+        for rule_metadata in self.filtering_rules:
+            boundary_rule_expressions = []
+            for boundary_rule_metadata in rule_metadata:
+                unit_rule_expressions = []
+                for unit_rule in boundary_rule_metadata:
+                    unit_method = unit_rule["unit_method"]
+                    value = unit_rule["value"]
+                    operator = unit_rule["operator_method"]
+
+                    unit_rule_expressions.append(
+                        getattr(
+                            getattr(
+                                pl.col(self.time_column).dt, unit_method
+                            )(),
+                            operator,
+                        )(value)
+                    )
+
+                boundary_rule_expression = generate_polars_condition(
+                    unit_rule_expressions, "and_"
+                )
+                boundary_rule_expressions.append(boundary_rule_expression)
+
+            rule_expression = generate_polars_condition(
+                boundary_rule_expressions, "and_"
+            )
+
+            rules.append(rule_expression)
+
+        overall_rule_expression = generate_polars_condition(
+            rules, "or_"
+        ).not_()
+
+        return overall_rule_expression
+
+    def transform(self, X):
+        rule_expression = self._convert_rules_to_polars_expressions()
+
+        X = X.filter(rule_expression)
+
+        return X
+
+    def _parse_time_patterns_into_rules(self, independent_time_patterns):
+        rules = []  # list to store
+        for pattern in independent_time_patterns:
+            pattern = pattern.replace(" ", "").split(",")
+            pattern = [rule_str for rule_str in pattern if rule_str]
+            if len(pattern) > 2:
+                raise ValueError("")  # TODO add value error
+
+            rule_metadata = []
+            for rule_str in pattern:
+                operator = ""
+                duration_string = ""
+                operator_methods = []
+                for char in rule_str:
+                    if char in {">", "<", "="}:
+                        operator += char
+                    else:
+                        duration_string += char
+                        if operator:
+                            operator_method = FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[  # noqa: B950
+                                operator
+                            ]
+                            operator_methods.append(operator_method)
+                        operator = ""
+
+                polars_duration = PolarsDuration(duration=duration_string)
+                decomposed_duration = polars_duration.decomposed_duration
+
+                rule_components = []
+                for (
+                    value,
+                    unit,
+                ), operator in zip(  # noqa: B905 (strict parameter introduced in Python 3.10 but want code to be valid for 3.8)
+                    decomposed_duration, operator_methods
+                ):
+                    unit_method = FilterDataBasedOnTime.UNIT_TO_POLARS_METHOD_MAPPING.get(  # noqa: B950
+                        unit, None
+                    )
+                    if unit_method is None:
+                        raise ValueError()  # TODO add
+
+                    rule_component = {
+                        "value": value,
+                        "unit_method": unit_method,
+                        "operator_method": operator,
+                    }
+
+                    rule_components.append(rule_component)
+
+                rule_metadata.append(rule_components)
+
+            rules.append(rule_metadata)
+
+        return rules
+
+    # -- <5s
+    # -- >10s
+    # -- =3d>6h
+
+    # -- realistically:
+    # I would like to remove: minutes from an hour
+    # hours from a day
+    # days from a week
+    # days from a month
+    # months from a year
+    # potentially combinations of these, e.g. remove weekends, and also remove lunches
+    # what about interaction?
+    # e.g.: remove within weekends, hours of X and Y
+    #
 
 
 # If no target cols provided, tries to apply to all!

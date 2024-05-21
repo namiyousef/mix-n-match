@@ -71,11 +71,53 @@ def generate_polars_condition(expressions, operator):
     return final_expression
 
 
+# y: year
+# q:
+# mo:
+# w:
+# d
+# h
+# m
+# s
+# ms
+# us
+# ns
+
+# if y, mo, d, h, m, s ms us ns we must also extract the children and add rules for them  # noqa
+# but what about interactions?
+# if I say >6d>2h<6h
+# >6d2h<6h
+# > day 6 AND > hour 2 and < hour 6
+
+
+# what does > 2023 means remove everything more than 2023-01-01 00:00:00
+#
+# what does > 1h mean?
+POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
+    "y": {"next": "mo", "start": 1},
+    "mo": {"next": "d", "start": 1},
+    "d": {"next": "h", "start": 0},
+    "h": {"next": "m", "start": 0},
+    "m": {"next": "s", "start": 0},
+    "s": {"next": "ms", "start": 0},
+    "ms": {"next": "us", "start": 0},
+    "us": {"next": "ns", "start": 0},
+}
+
+
 class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
-    UNIT_TO_POLARS_METHOD_MAPPING = {"d": "day", "h": "hour"}
+    UNIT_TO_POLARS_METHOD_MAPPING = {
+        "d": "day",
+        "h": "hour",
+        "m": "minute",
+        "s": "second",
+        "ms": "millisecond",
+        "us": "microsecond",
+        "ns": "nanosecond",
+    }
 
     OPERATOR_TO_POLARS_METHOD_MAPPING = {
-        "=": "eq",
+        "==": "eq",
         "!=": "ne",
         "<=": "le",
         "<": "lt",
@@ -93,33 +135,112 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         pass
 
+    def _generate_simple_condition(self, unit, value, operator):
+        return getattr(
+            getattr(
+                pl.col(self.time_column).dt,
+                FilterDataBasedOnTime.UNIT_TO_POLARS_METHOD_MAPPING[unit],
+            )(),
+            operator,
+        )(value)
+
+    def _generate_cascade_condition(self, unit, value, operator):
+        simple_condition = self._generate_simple_condition(
+            unit, value, operator
+        )
+        all_conditions = [simple_condition]
+        if operator == "gt":
+            equality_condition = self._generate_simple_condition(
+                unit, value, "eq"
+            )
+            child_unit_conditions = []
+            child_unit_metadata = (
+                POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.get(unit, None)
+            )
+            while child_unit_metadata is not None:
+                start_value = child_unit_metadata["start"]
+                child_unit = child_unit_metadata["next"]
+                child_unit_condition = self._generate_simple_condition(
+                    child_unit, start_value, "gt"
+                )
+                child_unit_conditions.append(child_unit_condition)
+                child_unit_metadata = (
+                    POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.get(
+                        child_unit, None
+                    )
+                )
+
+            cascase_condition = generate_polars_condition(
+                [
+                    equality_condition,
+                    generate_polars_condition(child_unit_conditions, "or_"),
+                ],
+                "and_",
+            )
+
+            all_conditions.append(cascase_condition)
+
+        overall_condition = generate_polars_condition(all_conditions, "or_")
+
+        return overall_condition
+
     def _convert_rules_to_polars_expressions(self):
         rules = []  # list to store expressions for each rule
         for rule_metadata in self.filtering_rules:
-            boundary_rule_expressions = []
-            for boundary_rule_metadata in rule_metadata:
-                unit_rule_expressions = []
-                for unit_rule in boundary_rule_metadata:
-                    unit_method = unit_rule["unit_method"]
-                    value = unit_rule["value"]
-                    operator = unit_rule["operator_method"]
-
-                    unit_rule_expressions.append(
-                        getattr(
-                            getattr(
-                                pl.col(self.time_column).dt, unit_method
-                            )(),
-                            operator,
-                        )(value)
+            rule_expressions = []
+            for condition in rule_metadata:
+                how = condition["how"]
+                decomposed_duration = condition["decomposed_duration"]
+                operator = condition["operator"]
+                if how == "simple":
+                    expression = generate_polars_condition(
+                        [
+                            self._generate_simple_condition(
+                                unit, value, operator
+                            )
+                            for value, unit in decomposed_duration
+                        ],
+                        "and_",
+                    )
+                else:
+                    expression = generate_polars_condition(
+                        [
+                            self._generate_cascade_condition(
+                                unit, value, operator
+                            )
+                            for value, unit, in decomposed_duration
+                        ],
+                        "and_",
                     )
 
-                boundary_rule_expression = generate_polars_condition(
-                    unit_rule_expressions, "and_"
-                )
-                boundary_rule_expressions.append(boundary_rule_expression)
+                rule_expressions.append(expression)
 
             rule_expression = generate_polars_condition(
-                boundary_rule_expressions, "and_"
+                rule_expressions, "and_"
+            )
+            rules.append(rule_expression)
+
+        overall_rule_expression = generate_polars_condition(
+            rules, "or_"
+        ).not_()
+
+        return overall_rule_expression
+        """    unit_rule_expressions = []
+            for unit_rule in rule_metadata:
+                unit_method = unit_rule["unit_method"]
+                value = unit_rule["value"]
+                operator = unit_rule["operator_method"]
+
+                unit_rule_expressions.append(
+                    getattr(
+                        getattr(
+                            pl.col(self.time_column).dt, unit_method
+                        )(),
+                        operator,
+                    )(value)
+                )
+            rule_expression = generate_polars_condition(
+                unit_rule_expressions, "and_"
             )
 
             rules.append(rule_expression)
@@ -128,7 +249,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
             rules, "or_"
         ).not_()
 
-        return overall_rule_expression
+        return overall_rule_expression"""
 
     def transform(self, X):
         rule_expression = self._convert_rules_to_polars_expressions()
@@ -140,55 +261,70 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     def _parse_time_patterns_into_rules(self, independent_time_patterns):
         rules = []  # list to store
         for pattern in independent_time_patterns:
-            pattern = pattern.replace(" ", "").split(",")
-            pattern = [rule_str for rule_str in pattern if rule_str]
-            if len(pattern) > 2:
-                raise ValueError("")  # TODO add value error
-
-            rule_metadata = []
-            for rule_str in pattern:
-                operator = ""
-                duration_string = ""
-                operator_methods = []
-                for char in rule_str:
-                    if char in {">", "<", "="}:
-                        operator += char
-                    else:
-                        duration_string += char
-                        if operator:
-                            operator_method = FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[  # noqa: B950
-                                operator
-                            ]
-                            operator_methods.append(operator_method)
+            pattern = pattern.replace(" ", "")
+            operator = ""
+            operators = []
+            duration_string = ""
+            duration_strings = []
+            for char in pattern:
+                if char in {">", "<", "="}:
+                    operator += char
+                    if duration_string:
+                        duration_strings.append(duration_string)
+                        duration_string = ""
+                else:
+                    duration_string += char
+                    if operator:
+                        operators.append(operator)
                         operator = ""
+            duration_strings.append(duration_string)
+
+            rule_components = []
+            for (
+                operator,
+                duration_string,
+            ) in zip(  # noqa: B905 zip(strict) added in py310 but want code to work with >=py38
+                operators, duration_strings
+            ):
+                operator_method = (
+                    FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[
+                        operator
+                    ]
+                )
+                if duration_string.endswith("*"):
+                    duration_string = duration_string[:-1]
+                    if operator in {"!=", "=="}:
+                        raise NotImplementedError(
+                            f"Cascade operations are currently not supported for `{operator}`"  # noqa: B950
+                        )
+                    how = "cascade"
+                else:
+                    how = "simple"
 
                 polars_duration = PolarsDuration(duration=duration_string)
                 decomposed_duration = polars_duration.decomposed_duration
 
-                rule_components = []
-                for (
-                    value,
-                    unit,
-                ), operator in zip(  # noqa: B905 (strict parameter introduced in Python 3.10 but want code to be valid for 3.8)
-                    decomposed_duration, operator_methods
+                if any(
+                    unit not in POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING
+                    for _, unit in decomposed_duration
                 ):
-                    unit_method = FilterDataBasedOnTime.UNIT_TO_POLARS_METHOD_MAPPING.get(  # noqa: B950
-                        unit, None
+                    raise ValueError(
+                        (
+                            "You requested a cascade condition on an invalid "
+                            "duration. Durations supporting cascade: "
+                            f"{POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING}"
+                        )
                     )
-                    if unit_method is None:
-                        raise ValueError()  # TODO add
 
-                    rule_component = {
-                        "value": value,
-                        "unit_method": unit_method,
-                        "operator_method": operator,
-                    }
+                rule_component = {
+                    "operator": operator_method,
+                    "decomposed_duration": decomposed_duration,
+                    "how": how,
+                }
 
-                    rule_components.append(rule_component)
+                rule_components.append(rule_component)
 
-                rule_metadata.append(rule_components)
-
-            rules.append(rule_metadata)
+            rules.append(rule_components)
 
         return rules
 
@@ -206,6 +342,33 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     # what about interaction?
     # e.g.: remove within weekends, hours of X and Y
     #
+
+
+df = pl.DataFrame(
+    {
+        "date": [
+            "2023-01-01 00:00:00",
+            "2023-01-01 01:00:00",
+            "2023-01-01 01:15:00",
+            "2023-01-01 02:00:00",
+            "2023-01-01 03:00:00",
+            "2023-01-01 04:00:00",
+            "2023-01-01 05:00:00",
+            "2023-01-01 06:00:00",
+            "2023-01-01 07:00:00",
+            "2023-01-01 08:00:00",
+            "2023-01-01 09:00:00",
+            "2023-01-02 00:00:00",
+            "2023-03-01 00:00:00",
+            "2024-01-01 00:00:00",
+        ]
+    }
+).with_columns(pl.col("date").str.strptime(pl.Datetime))
+
+# -- remove any dates where hour > 1. Note: this does not include 01:15:00 since we make no filter on minutes  # noqa
+processor = FilterDataBasedOnTime(time_column="date", time_patterns=[">1h"])
+
+df_transformed = processor.transform(df)
 
 
 # If no target cols provided, tries to apply to all!

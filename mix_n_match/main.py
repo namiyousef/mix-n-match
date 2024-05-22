@@ -71,28 +71,7 @@ def generate_polars_condition(expressions, operator):
     return final_expression
 
 
-# y: year
-# q:
-# mo:
-# w:
-# d
-# h
-# m
-# s
-# ms
-# us
-# ns
-
-# if y, mo, d, h, m, s ms us ns we must also extract the children and add rules for them  # noqa
-# but what about interactions?
-# if I say >6d>2h<6h
-# >6d2h<6h
-# > day 6 AND > hour 2 and < hour 6
-
-
-# what does > 2023 means remove everything more than 2023-01-01 00:00:00
-#
-# what does > 1h mean?
+# -- mapping to store each units of time and their immediate child
 POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
     "y": {"next": "mo", "start": 1},
     "mo": {"next": "d", "start": 1},
@@ -106,6 +85,18 @@ POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
 
 
 class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
+    """Class to enable inuitive filtering of data based on time conditions.
+
+    :param time_column: column to filter on
+    :param time_patterns: list of time patterns to filter. Each
+        individual time pattern is comprised of polars durations with
+        operators. For example: >1h<6h means filter times where `hour` >
+        1 and `hour` < 6. If multiple durations applied together, then
+        operator applies to all. For example: '>=6d6h' means remove
+        values where 'day' >= 6 and 'hour' >=6. Note that a time
+        duration greater than a specific value simply
+    """
+
     UNIT_TO_POLARS_METHOD_MAPPING = {
         "d": "day",
         "h": "hour",
@@ -125,7 +116,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         ">=": "ge",
     }
 
-    def __init__(self, time_column, time_patterns):
+    def __init__(self, time_column: str, time_patterns: list[str]):
         self.time_column = time_column
 
         self.filtering_rules = self._parse_time_patterns_into_rules(

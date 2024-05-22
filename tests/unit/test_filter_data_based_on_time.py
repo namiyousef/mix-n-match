@@ -80,7 +80,7 @@ class TestFilterDataBasedOnTime(unittest.TestCase):
             "2024-01-01 00:00:00",
         ]
 
-        # -- remove any dates where hour > 1  # noqa
+        # -- remove any dates where hour > 1
         processor = FilterDataBasedOnTime(
             time_column="date", time_patterns=[">1h*"]
         )
@@ -90,6 +90,23 @@ class TestFilterDataBasedOnTime(unittest.TestCase):
         assert df_transformed["date"].dt.strftime(DATE_FORMAT).to_list() == [
             "2023-01-01 00:00:00",
             "2023-01-01 01:00:00",
+            "2023-01-02 00:00:00",
+            "2023-03-01 00:00:00",
+            "2024-01-01 00:00:00",
+        ]
+
+        # -- remove any times between 1-8 am
+        processor = FilterDataBasedOnTime(
+            time_column="date", time_patterns=[">1h*<8h"]
+        )
+
+        df_transformed = processor.transform(df)
+
+        assert df_transformed["date"].dt.strftime(DATE_FORMAT).to_list() == [
+            "2023-01-01 00:00:00",
+            "2023-01-01 01:00:00",
+            "2023-01-01 08:00:00",
+            "2023-01-01 09:00:00",
             "2023-01-02 00:00:00",
             "2023-03-01 00:00:00",
             "2024-01-01 00:00:00",

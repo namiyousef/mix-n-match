@@ -8,39 +8,57 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 class TestFilterDataBasedOnTime(unittest.TestCase):
-    """def test_time_pattern_parsing(self):
-    # -- test reject if multiple boundaries provided
+    def test_parse_time_pattern(self):
+        # -- basic pattern
+        duration = "1h"
+        for (
+            operator
+        ) in FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING:
+            (
+                duration_strings,
+                operators,
+            ) = FilterDataBasedOnTime._parse_time_pattern(
+                self=None, pattern=f"{operator}{duration}"
+            )
 
-    time_patterns = [">1h<3h>5h"]
+            assert duration_strings == [duration]
+            assert operators == [operator]
 
-    with self.assertRaises(ValueError):
-        processor = FilterDataBasedOnTime(time_column="dummy", time_patterns=time_patterns)  # noqa
+        # -- repeating pattern
+        pattern = ">1h1h"
+        (
+            duration_strings,
+            operators,
+        ) = FilterDataBasedOnTime._parse_time_pattern(
+            self=None, pattern=pattern
+        )
 
-    # -- test patterns
-    time_patterns = [">1h"]
-    processor = FilterDataBasedOnTime(time_column="dummy", time_patterns=time_patterns)  # noqa
-    assert processor.filtering_rules == [
-        [
-            [{"value": 1, "unit_method": "hour", "operator_method": 'gt'}]
-        ]
-    ]
+        assert duration_strings == ["1h1h"]
+        assert operators == [">"]
 
-    time_patterns = [">1h, <3h"]
-    processor = FilterDataBasedOnTime(time_column="dummy", time_patterns=time_patterns)  # noqa
-    assert processor.filtering_rules == [
-        [
-            [{"value": 1, "unit_method": "hour", "operator_method": 'gt'}],
-            [{"value": 3, "unit_method": "hour", "operator_method": 'gt'}]
+        # -- repeating pattern with condition
+        pattern = ">1h>1h"
+        (
+            duration_strings,
+            operators,
+        ) = FilterDataBasedOnTime._parse_time_pattern(
+            self=None, pattern=pattern
+        )
 
-        ]
-    ]
+        assert duration_strings == ["1h", "1h"]
+        assert operators == [">", ">"]
 
-    # -- test multiple patterns
+        # -- repeating pattern with different condition
+        pattern = ">1h<1h"
+        (
+            duration_strings,
+            operators,
+        ) = FilterDataBasedOnTime._parse_time_pattern(
+            self=None, pattern=pattern
+        )
 
-
-
-
-    pass"""
+        assert duration_strings == ["1h", "1h"]
+        assert operators == [">", "<"]
 
     def test_filter_data_based_on_time(self):
         df = pl.DataFrame(

@@ -10,7 +10,7 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 class TestFilterDataBasedOnTime(unittest.TestCase):
     def test_parse_time_pattern(self):
         # -- basic pattern
-        duration = "1h"
+        duration = "1h*"
         for (
             operator
         ) in FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING:
@@ -59,6 +59,69 @@ class TestFilterDataBasedOnTime(unittest.TestCase):
 
         assert duration_strings == ["1h", "1h"]
         assert operators == [">", "<"]
+
+    def test_create_rule_metadata_from_condition(self):
+        # -- test simple
+        duration_string = "1d1h"
+        operator = ">"
+        rule_metadata = (
+            FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                self=None, duration_string=duration_string, operator=operator
+            )
+        )
+
+        assert rule_metadata == {
+            "operator": "gt",
+            "decomposed_duration": [(1, "d"), (1, "h")],
+            "how": "simple",
+        }
+
+        # -- test cascade
+        duration_string = "1h*"
+        operator = ">="
+        rule_metadata = (
+            FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                self=None, duration_string=duration_string, operator=operator
+            )
+        )
+
+        assert rule_metadata == {
+            "operator": "ge",
+            "decomposed_duration": [(1, "h")],
+            "how": "cascade",
+        }
+
+        # -- test invalid cascade operators
+
+        with self.assertRaises(NotImplementedError):
+            rule_metadata = (
+                FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                    self=None, duration_string=duration_string, operator="!="
+                )
+            )
+
+        with self.assertRaises(NotImplementedError):
+            rule_metadata = (
+                FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                    self=None, duration_string=duration_string, operator="=="
+                )
+            )
+
+        # -- test invalid cascade durations
+
+        with self.assertRaises(ValueError):
+            rule_metadata = (
+                FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                    self=None, duration_string="1q*", operator=operator
+                )
+            )
+
+        with self.assertRaises(ValueError):
+            rule_metadata = (
+                FilterDataBasedOnTime._create_rule_metadata_from_condition(
+                    self=None, duration_string="1w*", operator=operator
+                )
+            )
 
     def test_filter_data_based_on_time(self):
         df = pl.DataFrame(

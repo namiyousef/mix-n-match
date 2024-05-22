@@ -171,7 +171,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
 
         return rules
 
-    def _parse_time_pattern(self, pattern: str):
+    def _parse_time_pattern(self, pattern: str) -> tuple[list[str]]:
         """Extracts distinct durations and operators applied to them from a
         time pattern.
 
@@ -207,7 +207,35 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
 
         return duration_strings, operators
 
-    def _create_rule_metadata_from_condition(self, duration_string, operator):
+    def _create_rule_metadata_from_condition(
+        self, duration_string: str, operator: str
+    ) -> dict:
+        """Given a duration and the operator applied to it, returns a
+        dictionary containing the rule method (cascade or simple), the Polars
+        method corresponding to the operator, and the duration string
+        decomposed into values and simple units.
+
+        :param duration_string: duration string, example: 1h* (cascade) or 1h (simple)
+        :param operator: Operator to apply, example: ">"
+
+        Example:
+            _create_rule_metadata_from_condition(
+                duration_string="1h*", operator=">"
+            )
+            >>> {
+                "operator": "gt",  # polars method for >
+                "decomposed_duration": [(1, "h")],
+                "how": "cascade"  # since *
+            }
+            _create_rule_metadata_from_condition(
+                duration_string="1d6h", operator=">="
+            )
+                >>> {
+                "operator": "ge",  # polars method for >=
+                "decomposed_duration": [(1, "d"), (6, "h")],
+                "how": "simple"  # since no *
+            }
+        """
         operator_method = (
             FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[operator]
         )
@@ -232,7 +260,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
                 (
                     "You requested a cascade condition on an invalid "
                     "duration. Durations supporting cascade: "
-                    f"{POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING}"
+                    f"{list(POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.keys())}"
                 )
             )
 

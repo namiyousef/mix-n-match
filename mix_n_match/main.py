@@ -76,6 +76,7 @@ POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
     "y": {"next": "mo", "start": 1},
     "mo": {"next": "d", "start": 1},
     "d": {"next": "h", "start": 0},
+    "wd": {"next": "h", "start": 0},
     "h": {"next": "m", "start": 0},
     "m": {"next": "s", "start": 0},
     "s": {"next": "ms", "start": 0},
@@ -113,6 +114,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         "ms": "millisecond",
         "us": "microsecond",
         "ns": "nanosecond",
+        "wd": "weekday",
     }
 
     OPERATOR_TO_POLARS_METHOD_MAPPING = {
@@ -135,6 +137,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         pass
 
     def transform(self, X: pl.DataFrame) -> pl.DataFrame:
+        # TODO add docstring
         rule_expression = self._convert_rules_to_polars_expressions()
 
         X = X.filter(rule_expression)
@@ -144,6 +147,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     def _parse_time_patterns_into_rules(
         self, time_patterns: list[str]
     ) -> list:
+        # TODO add test and add example to docstring
         """Reads input time patterns and parses them into a usable format for
         rule generation later.
 
@@ -252,7 +256,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         polars_duration = PolarsDuration(duration=duration_string)
         decomposed_duration = polars_duration.decomposed_duration
 
-        if any(
+        if how == "cascade" and any(
             unit not in POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING
             for _, unit in decomposed_duration
         ):
@@ -273,6 +277,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         return rule_metadata
 
     def _convert_rules_to_polars_expressions(self):
+        # TODO add tests and example to docstrings, also simplify code
         rules = []  # list to store expressions for each rule
         for rule_metadata in self.filtering_rules:
             rule_expressions = []
@@ -315,6 +320,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         return overall_rule_expression
 
     def _generate_simple_condition(self, unit, value, operator):
+        # TODO add tests and example in docstring
         return getattr(
             getattr(
                 pl.col(self.time_column).dt,
@@ -324,6 +330,7 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         )(value)
 
     def _generate_cascade_condition(self, unit, value, operator):
+        # TODO add tests and example in docstirng
         simple_condition = self._generate_simple_condition(
             unit, value, operator
         )

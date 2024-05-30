@@ -3,11 +3,16 @@
 # apply to all target cols that behave, unless specified otherwise
 import logging
 from enum import Enum
+from typing import Callable
 
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from mix_n_match.utils import detect_timeseries_frequency
+from mix_n_match.utils import (
+    PolarsDuration,
+    detect_timeseries_frequency,
+    generate_polars_condition,
+)
 
 logger = logging.getLogger(__file__)
 
@@ -62,6 +67,359 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 # will need to modify code!
 
 
+# -- mapping to store each units of time and their immediate child
+POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
+    "y": {"next": "mo", "start": 1},
+    "mo": {"next": "d", "start": 1},
+    "d": {"next": "h", "start": 0},
+    "wd": {"next": "h", "start": 0},
+    "h": {"next": "m", "start": 0},
+    "m": {"next": "s", "start": 0},
+    "s": {"next": "ms", "start": 0},
+    "ms": {"next": "us", "start": 0},
+    "us": {"next": "ns", "start": 0},
+}
+
+
+# -- TODO add support for native "weekend condition, e.g. custom method where weekday in (6,7) and optional support for changing default weekend"  # noqa
+class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
+    """Class to enable inuitive filtering of data based on time conditions.
+
+    :param time_column: column to filter on
+    :param time_patterns: list of time patterns to filter. Each
+        individual time pattern is comprised of polars durations with
+        operators. Within each time pattern, the AND condition is
+        applied, but OR condition is applied between each time pattern.
+        For example: ['>1h<6h'] means filter times where `hour`>1 AND
+        `hour` < 6, whereas ['>1h', '<6h'] means `hour`>1 OR `hour`<6.
+        If multiple durations applied together, then operator applies to
+        all. For example: ['>=6d6h'] means remove values where 'day' >=
+        6 and 'hour' >=6. Note that a time duration condition ONLY
+        applied to the unit of time provided, so for example ['>1h']
+        does would remove 02:00: 00, but not 01:00: 01, because the 'hour'
+        unit is not greater than 1. For enabling such inclusive cases, you
+        can specify * to the condition which triggers a cascade effect,
+        e.g.  ['>1h*'] means: 'hour' > 1 OR
+        ('hour' == 1 AND (any('minute', 'second', 'millisecond', etc... > 0))).
+    :param keep: flag if set to True then the time patterns provided are data
+        to keep instead of remove
+    :param label_data: flag if set to True then returns a column
+        "_data_to_filter" with True if data to be filtered, false otherwise.
+        No actual data filtering occurs
+    """
+
+    UNIT_TO_POLARS_METHOD_MAPPING = {
+        "d": "day",
+        "h": "hour",
+        "m": "minute",
+        "s": "second",
+        "ms": "millisecond",
+        "us": "microsecond",
+        "ns": "nanosecond",
+        "wd": "weekday",
+    }
+
+    OPERATOR_TO_POLARS_METHOD_MAPPING = {
+        "==": "eq",
+        "!=": "ne",
+        "<=": "le",
+        "<": "lt",
+        ">": "gt",
+        ">=": "ge",
+    }
+
+    def __init__(
+        self,
+        time_column: str,
+        time_patterns: list[str],
+        keep: bool = False,
+        label_data: bool = False,
+    ):  # TODO add keep
+        self.time_column = time_column
+        self.keep = keep
+        if self.keep:
+            raise NotImplementedError(
+                "This needs to be implemented. Cascade operations need to be applied to <= etc..."  # noqa
+            )
+        self.filtering_rules = self._parse_time_patterns_into_rules(
+            time_patterns
+        )
+
+        self.label_data = label_data
+
+    def fit(self, X: pl.DataFrame, y=None):
+        pass
+
+    def transform(self, X: pl.DataFrame) -> pl.DataFrame:
+        """Function to transform filter a polars dataframe.
+
+        :param X: polars dataframe to filter
+        :return: filtered polars dataframe
+        """
+        rule_expression = self._convert_rules_to_polars_expressions()
+
+        if self.label_data:
+            X = X.with_columns(rule_expression.alias("_data_to_filter"))
+        else:
+            X = X.filter(rule_expression)
+
+        return X
+
+    def _parse_time_patterns_into_rules(
+        self, time_patterns: list[str]
+    ) -> list:
+        """Reads input time patterns and parses them into a usable format for
+        rule generation later.
+
+        :param time_patterns: time_patterns. See class definition for details.
+        :returns: Parsed time patterns as rule metadata
+        """
+        rules = []  # list to store
+        for pattern in time_patterns:
+            duration_strings, operators = self._parse_time_pattern(pattern)
+
+            rule_components = []
+            for (
+                operator,
+                duration_string,
+            ) in zip(  # noqa: B905 zip(strict) added in py310 but want code to work with >=py38
+                operators, duration_strings
+            ):
+                rule_component = self._create_rule_metadata_from_condition(
+                    duration_string=duration_string, operator=operator
+                )
+
+                rule_components.append(rule_component)
+
+            rules.append(rule_components)
+
+        return rules
+
+    def _parse_time_pattern(self, pattern: str) -> tuple[list[str]]:
+        """Extracts distinct durations and operators applied to them from a
+        time pattern.
+
+        :param pattern: time_pattern. See description of
+            `FilterDataBasedOnTime` for more information
+        :returns: A list of distinct durations and operators applied to them
+
+        Example:
+            pattern = "==1mo>6d1h<7d"
+            _parse_time_pattern("==1mo>6d1h<7d")
+            >>> (
+                ["1mo", "6d1h", "7d"],
+                ["==", ">", "<"]
+            )
+        """
+        pattern = pattern.replace(" ", "")
+        operator = ""
+        operators = []
+        duration_string = ""
+        duration_strings = []
+        for char in pattern:
+            if char in {">", "<", "=", "!"}:
+                operator += char
+                if duration_string:
+                    duration_strings.append(duration_string)
+                    duration_string = ""
+            else:
+                duration_string += char
+                if operator:
+                    operators.append(operator)
+                    operator = ""
+        duration_strings.append(duration_string)
+
+        return duration_strings, operators
+
+    def _create_rule_metadata_from_condition(
+        self, duration_string: str, operator: str
+    ) -> dict:
+        """Given a duration and the operator applied to it, returns a
+        dictionary containing the rule method (cascade or simple), the Polars
+        method corresponding to the operator, and the duration string
+        decomposed into values and simple units.
+
+        :param duration_string: duration string, example: 1h* (cascade) or 1h (simple)
+        :param operator: Operator to apply, example: ">"
+
+        Example:
+            _create_rule_metadata_from_condition(
+                duration_string="1h*", operator=">"
+            )
+            >>> {
+                "operator": "gt",  # polars method for >
+                "decomposed_duration": [(1, "h")],
+                "how": "cascade"  # since *
+            }
+            _create_rule_metadata_from_condition(
+                duration_string="1d6h", operator=">="
+            )
+                >>> {
+                "operator": "ge",  # polars method for >=
+                "decomposed_duration": [(1, "d"), (6, "h")],
+                "how": "simple"  # since no *
+            }
+        """
+        operator_method = (
+            FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[operator]
+        )
+        if duration_string.endswith("*"):
+            duration_string = duration_string[:-1]
+            if operator in {
+                "!=",
+                "==",
+            }:  # cascade doesn't really make sense for equality
+                raise NotImplementedError(
+                    f"Cascade operations are currently not supported for `{operator}`"  # noqa: B950
+                )
+            how = "cascade"
+        else:
+            how = "simple"
+
+        polars_duration = PolarsDuration(duration=duration_string)
+        decomposed_duration = polars_duration.decomposed_duration
+
+        if how == "cascade" and any(
+            unit not in POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING
+            for _, unit in decomposed_duration
+        ):
+            raise ValueError(
+                (
+                    "You requested a cascade condition on an invalid "
+                    "duration. Durations supporting cascade: "
+                    f"{list(POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.keys())}"
+                )
+            )
+
+        rule_metadata = {
+            "operator": operator_method,
+            "decomposed_duration": decomposed_duration,
+            "how": how,
+        }
+
+        return rule_metadata
+
+    def _convert_rules_to_polars_expressions(self):
+        """Converts defined rules into Polars expressions.
+
+        :return: overall polars expression from parsed rules
+        """
+        rules = []  # list to store expressions for each rule
+        for rule_metadata in self.filtering_rules:
+            rule_expressions = []
+            for condition in rule_metadata:
+                how = condition["how"]
+                decomposed_duration = condition["decomposed_duration"]
+                operator = condition["operator"]
+                if how == "simple":
+                    expression = generate_polars_condition(
+                        [
+                            self._generate_simple_condition(
+                                unit, value, operator
+                            )
+                            for value, unit in decomposed_duration
+                        ],
+                        "and_",
+                    )
+                else:
+                    expression = generate_polars_condition(
+                        [
+                            self._generate_cascade_condition(
+                                unit, value, operator
+                            )
+                            for value, unit, in decomposed_duration
+                        ],
+                        "and_",
+                    )
+
+                rule_expressions.append(expression)
+
+            rule_expression = generate_polars_condition(
+                rule_expressions, "and_"
+            )
+            rules.append(rule_expression)
+
+        overall_rule_expression = generate_polars_condition(rules, "or_")
+
+        if not self.keep:
+            overall_rule_expression = overall_rule_expression.not_()
+
+        return overall_rule_expression
+
+    def _generate_simple_condition(self, unit, value, operator):
+        """Function to generate a simple filtering condition.
+
+        :param unit: unit of time with a corresponding Polars method, e.g. "d"
+        :param value: value to use for filtering
+        :param operator: Polars operator to use, e.g. "lt" (less than)
+        :return: a Polars expression of the condition described applied
+            to the time column
+
+        Example:
+            str(_generate_simple_condition("h", 1, "lt"))
+            >>> "[(col("date").dt.hour()) < (dyn int: 1)]"
+        """
+        return getattr(
+            getattr(
+                pl.col(self.time_column).dt,
+                FilterDataBasedOnTime.UNIT_TO_POLARS_METHOD_MAPPING[unit],
+            )(),
+            operator,
+        )(value)
+
+    def _generate_cascade_condition(self, unit, value, operator):
+        """Generates a cascade condition. E.g. makes sure that >01:00 (%H:%M)
+        doesn't just mean >1 hour, but also means >01:XX.
+
+        :param unit: unit of time with a corresponding Polars method, e.g. "d"
+        :param value: value to use for filtering
+        :param operator: Polars operator to use, e.g. "lt" (less than)
+        :return: a Polars expression of the condition described applied to the time column
+
+        Example:
+            str(_generate_cascade_condition("d", 1, "gt"))  # will search for hour, minute, second, ms, us and ns  # noqa
+            >>> "[([([([([([([([(col("date").dt.nanosecond()) > (dyn int: 0)]) | ([(col("date").dt.hour()) > (dyn int: 0)])]) | ([(col("date").dt.minute()) > (dyn int: 0)])]) | ([(col("date").dt.second()) > (dyn int: 0)])]) | ([(col("date").dt.millisecond()) > (dyn int: 0)])]) | ([(col("date").dt.microsecond()) > (dyn int: 0)])]) & ([(col("date").dt.day()) == (dyn int: 1)])]) | ([(col("date").dt.day()) > (dyn int: 1)])]"  # noqa
+        """
+        simple_condition = self._generate_simple_condition(
+            unit, value, operator
+        )
+        all_conditions = [simple_condition]
+        if operator == "gt":
+            equality_condition = self._generate_simple_condition(
+                unit, value, "eq"
+            )
+            child_unit_conditions = []
+            child_unit_metadata = (
+                POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.get(unit, None)
+            )
+            while child_unit_metadata is not None:
+                start_value = child_unit_metadata["start"]
+                child_unit = child_unit_metadata["next"]
+                child_unit_condition = self._generate_simple_condition(
+                    child_unit, start_value, "gt"
+                )
+                child_unit_conditions.append(child_unit_condition)
+                child_unit_metadata = (
+                    POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING.get(
+                        child_unit, None
+                    )
+                )
+
+            cascase_condition = generate_polars_condition(
+                [
+                    equality_condition,
+                    generate_polars_condition(child_unit_conditions, "or_"),
+                ],
+                "and_",
+            )
+
+            all_conditions.append(cascase_condition)
+
+        overall_condition = generate_polars_condition(all_conditions, "or_")
+
+        return overall_condition
+
+
 # If no target cols provided, tries to apply to all!
 class ResampleData(BaseEstimator, TransformerMixin):
     """Abstraction over polars groupby_dynamic method to enable timeseries
@@ -89,6 +447,11 @@ class ResampleData(BaseEstimator, TransformerMixin):
         have partial data in a resampling window. See
         `PartialDataResolutionStrategy` enum for info
     :param group_by_columns: group by columns before resampling
+    :param filter_data_method: method that takes a dataframe and removes
+        data from it. This is compatible with
+        `partial_data_resolution_strategy`. Any extra rows removed here
+        will not affect the logic of determining if a window contains
+        partial data
     """
 
     def __init__(
@@ -112,6 +475,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
         truncate_window: str | None = None,
         partial_data_resolution_strategy: PartialDataResolutionStrategy = "keep",
         group_by_columns: list | None = None,
+        filter_data_method: Callable[[pl.DataFrame], pl.DataFrame]
+        | None = None,
     ):
         self.time_column = time_column
         self.resampling_frequency = resampling_frequency
@@ -153,6 +518,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
         )
 
         self.group_by_columns = group_by_columns
+        self.filter_data_method = filter_data_method
 
     def _set_start_window_offset(self, start_window_offset):
         if start_window_offset is not None:
@@ -297,10 +663,7 @@ class ResampleData(BaseEstimator, TransformerMixin):
 
         return groupby_obj
 
-    def fit(self, X, y=None):
-        pass
-
-    def transform(self, X):
+    def _aggregate(self, X):
         # validation on the target functions!
         if self.target_columns is None:
             target_columns = set(X.columns)
@@ -314,8 +677,8 @@ class ResampleData(BaseEstimator, TransformerMixin):
         else:
             target_columns = self.target_columns
 
-        # -- sorting is necessary
         groupby_obj = self._groupby(X)
+
         agg_func_list = []
         multiple_resampling_functions = len(self.resampling_function) > 1
         for target_column in target_columns:
@@ -348,17 +711,21 @@ class ResampleData(BaseEstimator, TransformerMixin):
             != PartialDataResolutionStrategy.KEEP
         ):
             agg_func_list.append(
-                pl.col(self.time_column).count().alias("_count")
+                pl.col(self.time_column)
+                .unique()  # unique because we don't want duplicates to affect how we
+                # count rows for determining if we have a complete time window
+                .count()
+                .alias("_unique_timestamp_count")
             )
 
         df_agg = groupby_obj.agg(agg_func_list)
 
-        # TODO algorithm is naive, since the presence of duplicates could
-        # trick it
-        # A better solution would be to `collect`, and then apply a
-        # diff on tbe collected
-        # ones with the expected timeseries range. This will make
-        #  it slow though
+        return df_agg
+
+    def fit(self, X, y=None):
+        pass
+
+    def transform(self, X):
         if (
             self.partial_data_resolution_strategy
             != PartialDataResolutionStrategy.KEEP
@@ -367,6 +734,26 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 X, self.time_column, "mode"
             )
 
+        # -- filter data, but keep information on number of rows prior to filtration
+        if self.filter_data_method is not None:
+            df_agg_non_filtered = self._groupby(X).agg(
+                [
+                    pl.col(self.time_column)
+                    .unique()
+                    .count()
+                    .alias("_unique_timestamp_count_non_filtered")
+                ]
+            )
+
+            X = self.filter_data_method(X)
+
+        # -- group by and aggregate
+        df_agg = self._aggregate(X)
+
+        if (
+            self.partial_data_resolution_strategy
+            != PartialDataResolutionStrategy.KEEP
+        ):
             df_agg = df_agg.with_columns(
                 pl.col("_upper_boundary")
                 .sub(pl.col("_lower_boundary"))
@@ -375,8 +762,18 @@ class ResampleData(BaseEstimator, TransformerMixin):
                 .truediv(frequency)
             )
 
+            if self.filter_data_method is not None:
+                df_agg = df_agg.join(df_agg_non_filtered, on=self.time_column)
+                df_agg = df_agg.with_columns(
+                    pl.col("_unique_timestamp_count_non_filtered").alias(
+                        "_unique_timestamp_count"
+                    )
+                )
+
             df_agg = df_agg.with_columns(
-                pl.col("_count").lt(pl.col("_date_diff")).alias("_is_partial")
+                pl.col("_unique_timestamp_count")
+                .lt(pl.col("_date_diff"))
+                .alias("_is_partial")
             )
 
             match self.partial_data_resolution_strategy:
@@ -423,11 +820,74 @@ class ResampleData(BaseEstimator, TransformerMixin):
 if __name__ == "__main__":
     df = pl.DataFrame(
         {
-            "date": ["2022-01-01", "2022-01-02", "2023-02-01"],
-            "values": [1, 2, 3],
+            "date": [
+                # -- may 24th is a Friday, weekday
+                "2024-05-24 00:00:00",
+                "2024-05-24 06:00:00",
+                "2024-05-24 06:30:00",
+                "2024-05-24 20:00:00",
+                # -- may 25th is a Saturday, weekend
+                "2024-05-25 00:00:00",
+                "2024-05-25 06:00:00",
+                "2024-05-25 06:30:00",
+                "2024-05-25 20:00:00",
+            ]
+        }
+    ).with_columns(
+        pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+    )
+    processor = FilterDataBasedOnTime(
+        "date",
+        time_patterns=[
+            "<6wd<6h",
+            "<6wd>=20h",
+            ">=6wd<8h>=22h",
+            ">=6wd>=22h",
+        ],
+    )
+
+    print(
+        processor.transform(df).with_columns(
+            pl.col("date").dt.weekday().alias("weekday"),
+            pl.col("date").dt.hour().alias("hour"),
+        ),
+    )
+
+    raise Exception()
+    df = pl.DataFrame(
+        {
+            "date": [
+                "2022-01-01 06:00:00",
+                "2022-01-01 06:00:00",
+                "2022-01-01 12:00:00",
+                "2022-01-01 18:00:00",
+            ],
+            "values": [1, 2, 3, 4],
         }
     )
-    df = df.with_columns(pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d"))
+    df = df.with_columns(
+        pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+    )
+
+    import datetime
+
+    def method(x):
+        return x.filter(
+            pl.col("date") != datetime.datetime(2022, 1, 1, 6, 0, 0)
+        )
+
+    processor = ResampleData(
+        time_column="date",
+        resampling_frequency="1d",
+        target_columns=["values"],
+        partial_data_resolution_strategy="fail",
+        resampling_function="sum",
+        filter_data_method=method,
+    )
+
+    transformed = processor.transform(df)
+    print(transformed)
+    raise Exception()
 
     df = pl.DataFrame(
         {

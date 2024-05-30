@@ -6,7 +6,8 @@ A Polars-based package for efficient, easy and intuitive data processing.
 
 | Method      | Features |
 | ----------- | ----------- |
-| Resampling      |  Extends Polars ressampling to allow dealing with partial resampling windows  |
+| `ResampleData`      |  Extends Polars ressampling to allow dealing with partial resampling windows  |
+| `FilterDataBasedOnTime`| Intuitive temporal dataframe filtration [[blog]](https://towardsdatascience.com/intuitive-temporal-dataframe-filtration-fa9d5da734b3)
 
 ## Available Utils
 

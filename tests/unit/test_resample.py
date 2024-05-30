@@ -1,6 +1,7 @@
 import datetime
 import unittest
 from copy import deepcopy
+from functools import partial
 
 import dateutil
 import polars as pl
@@ -445,6 +446,207 @@ class TestResample(unittest.TestCase):
         df_transformed_2 = processor.transform(dataframe)
 
         assert_frame_equal(df_transformed_1, df_transformed_2)
+
+    def test_resample_with_partial_data_resolution(self):
+        # -- case partial but keep row
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="keep",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed.shape[0] == 1  # no rows dropped
+
+        # -- case partial but drop row
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="drop",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed.shape[0] == 0  # row dropped since partial
+
+        # -- case partial but strategy fail
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="fail",
+        )
+
+        with self.assertRaises(ValueError):
+            transformed = processor.transform(dataframe)
+
+        # -- case partial but strategy null
+
+        _dataframe = _prepare_dataframe(
+            [
+                "2023-01-02 00:00:00",
+                "2023-01-02 06:00:00",
+                "2023-01-02 12:00:00",
+                "2023-01-02 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        dataframe = pl.concat([dataframe, _dataframe])
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="null",
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert transformed["values"].to_list() == [
+            None,
+            _dataframe["values"].sum(),
+        ]
+
+    def test_resample_with_data_filtration(self):
+        # -- test that removal of row does not make the data partial
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        def _remove_n_rows(df, rows):
+            df = df.head(df.shape[0] - rows)
+            return df
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="drop",  # if partial, then empty
+            # dataframe returned
+            filter_data_method=partial(
+                _remove_n_rows, rows=1
+            ),  # remove last row
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert (
+            transformed["values"].item()
+            == _remove_n_rows(dataframe, 1)["values"].sum()
+        )
+
+        # -- with duplicates
+
+        # 1: case when duplicates not removed
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 00:00:00",
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="drop",  # if partial, then empty
+            # dataframe returned
+            filter_data_method=partial(
+                _remove_n_rows, rows=1
+            ),  # remove last row
+        )
+
+        transformed = processor.transform(dataframe)
+        assert (
+            transformed["values"].item()
+            == _remove_n_rows(dataframe, 1)["values"].sum()
+        )
+
+        # 2: case when duplicates removed
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 00:00:00",
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+                "2023-01-01 18:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            partial_data_resolution_strategy="drop",  # if partial, then empty
+            # dataframe returned
+            filter_data_method=partial(
+                _remove_n_rows, rows=2
+            ),  # remove two rows
+        )
+
+        transformed = processor.transform(dataframe)
+        assert (
+            transformed["values"].item()
+            == _remove_n_rows(dataframe, 2)["values"].sum()
+        )
+
+        # -- with offset
+        dataframe = _prepare_dataframe(
+            [
+                "2023-01-01 06:00:00",
+                "2023-01-01 12:00:00",
+                "2023-01-01 18:00:00",
+                "2023-01-02 00:00:00",
+            ],
+            "%Y-%m-%d %H:%M:%S",
+        )
+
+        def _remove_n_rows(df, rows):
+            df = df.head(df.shape[0] - rows)
+            return df
+
+        processor = ResampleData(
+            time_column="date",
+            resampling_frequency="1d",
+            resampling_function="sum",
+            start_window_offset="6h",
+            partial_data_resolution_strategy="drop",  # if partial, then empty
+            # dataframe returned
+            filter_data_method=partial(
+                _remove_n_rows, rows=1
+            ),  # remove last row
+        )
+
+        transformed = processor.transform(dataframe)
+
+        assert (
+            transformed["values"].item()
+            == _remove_n_rows(dataframe, 1)["values"].sum()
+        )
 
 
 if __name__ == "__main__":

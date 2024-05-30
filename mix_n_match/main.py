@@ -82,8 +82,6 @@ POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
 
 
 # -- TODO add support for native "weekend condition, e.g. custom method where weekday in (6,7) and optional support for changing default weekend"  # noqa
-# -- TODO add "keep" strategy, e.g. I want to keep data, so you won't apply the NOT condition at the end  # noqa
-# -- TODO flag for returning bool only  # noqa
 class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     """Class to enable inuitive filtering of data based on time conditions.
 
@@ -103,6 +101,11 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         can specify * to the condition which triggers a cascade effect,
         e.g.  ['>1h*'] means: 'hour' > 1 OR
         ('hour' == 1 AND (any('minute', 'second', 'millisecond', etc... > 0))).
+    :param keep: flag if set to True then the time patterns provided are data
+        to keep instead of remove
+    :param label_data: flag if set to True then returns a column
+        "_data_to_filter" with True if data to be filtered, false otherwise.
+        No actual data filtering occurs
     """
 
     UNIT_TO_POLARS_METHOD_MAPPING = {
@@ -125,12 +128,24 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         ">=": "ge",
     }
 
-    def __init__(self, time_column: str, time_patterns: list[str]):
+    def __init__(
+        self,
+        time_column: str,
+        time_patterns: list[str],
+        keep: bool = False,
+        label_data: bool = False,
+    ):  # TODO add keep
         self.time_column = time_column
-
+        self.keep = keep
+        if self.keep:
+            raise NotImplementedError(
+                "This needs to be implemented. Cascade operations need to be applied to <= etc..."  # noqa
+            )
         self.filtering_rules = self._parse_time_patterns_into_rules(
             time_patterns
         )
+
+        self.label_data = label_data
 
     def fit(self, X: pl.DataFrame, y=None):
         pass
@@ -143,7 +158,10 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         """
         rule_expression = self._convert_rules_to_polars_expressions()
 
-        X = X.filter(rule_expression)
+        if self.label_data:
+            X = X.with_columns(rule_expression.alias("_data_to_filter"))
+        else:
+            X = X.filter(rule_expression)
 
         return X
 
@@ -321,9 +339,10 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
             )
             rules.append(rule_expression)
 
-        overall_rule_expression = generate_polars_condition(
-            rules, "or_"
-        ).not_()
+        overall_rule_expression = generate_polars_condition(rules, "or_")
+
+        if not self.keep:
+            overall_rule_expression = overall_rule_expression.not_()
 
         return overall_rule_expression
 
@@ -340,7 +359,6 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
             str(_generate_simple_condition("h", 1, "lt"))
             >>> "[(col("date").dt.hour()) < (dyn int: 1)]"
         """
-        # TODO add tests and example in docstring
         return getattr(
             getattr(
                 pl.col(self.time_column).dt,

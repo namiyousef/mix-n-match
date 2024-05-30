@@ -1,6 +1,7 @@
 import unittest
 
 import polars as pl
+from polars.testing import assert_frame_equal
 
 from mix_n_match.main import FilterDataBasedOnTime
 from mix_n_match.utils import generate_polars_condition
@@ -227,6 +228,37 @@ class TestFilterDataBasedOnTime(unittest.TestCase):
             "2023-03-01 00:00:00",
             "2024-01-01 00:00:00",
         ]
+
+        # -- test label data
+        processor = FilterDataBasedOnTime(
+            time_column="date", time_patterns=[">1h*<8h"], label_data=True
+        )
+
+        df_transformed = processor.transform(df)
+
+        assert_frame_equal(
+            df_transformed,
+            df.with_columns(
+                _data_to_filter=pl.Series(
+                    [
+                        True,
+                        True,
+                        False,
+                        False,
+                        False,
+                        False,
+                        False,
+                        False,
+                        False,
+                        True,
+                        True,
+                        True,
+                        True,
+                        True,
+                    ]
+                )
+            ),
+        )
 
 
 if __name__ == "__main__":

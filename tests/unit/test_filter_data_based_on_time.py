@@ -3,6 +3,7 @@ import unittest
 import polars as pl
 
 from mix_n_match.main import FilterDataBasedOnTime
+from mix_n_match.utils import generate_polars_condition
 
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -122,6 +123,40 @@ class TestFilterDataBasedOnTime(unittest.TestCase):
                     self=None, duration_string="1w*", operator=operator
                 )
             )
+
+    def test_generate_simple_condition(self):
+        # -- simple example
+        processor = FilterDataBasedOnTime(
+            time_column="date", time_patterns=[">1h"]  # dummy
+        )
+        expression = processor._generate_simple_condition("h", 1, "lt")
+
+        expected_expression = pl.col("date").dt.hour() < 1
+
+        assert str(expression) == str(expected_expression)
+
+    def test_generate_cascade_condition(self):
+        # -- simple example
+        processor = FilterDataBasedOnTime(
+            time_column="date", time_patterns=[">1h"]  # dummy
+        )
+        expression = processor._generate_cascade_condition("d", 1, "gt")
+
+        expressions = [
+            pl.col("date").dt.hour() > 0,
+            pl.col("date").dt.minute() > 0,
+            pl.col("date").dt.second() > 0,
+            pl.col("date").dt.millisecond() > 0,
+            pl.col("date").dt.microsecond() > 0,
+            pl.col("date").dt.nanosecond() > 0,
+        ]
+
+        or_expression = generate_polars_condition(expressions, "or_")
+        expected_expression = or_expression.and_(
+            (pl.col("date").dt.day() == 1)
+        ).or_((pl.col("date").dt.day() > 1))
+
+        assert str(expression) == str(expected_expression)
 
     def test_filter_data_based_on_time(self):
         df = pl.DataFrame(

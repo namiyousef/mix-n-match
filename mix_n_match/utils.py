@@ -231,8 +231,6 @@ def generate_polars_condition(
     """
     final_expression = expressions.pop()
     for expression in expressions:
-        print(final_expression)
-        print(expression)
         final_expression = getattr(final_expression, operator)(expression)
 
     return final_expression

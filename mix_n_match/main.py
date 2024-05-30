@@ -81,9 +81,9 @@ POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
 }
 
 
-# -- add support for native "weekend condition, e.g. custom method where weekday in (6,7) and optional support for changing default weekend"  # noqa
-# -- add "keep" strategy, e.g. I want to keep data, so you won't apply the NOT condition at the end  # noqa
-# -- flag for returning bool only  # noqa
+# -- TODO add support for native "weekend condition, e.g. custom method where weekday in (6,7) and optional support for changing default weekend"  # noqa
+# -- TODO add "keep" strategy, e.g. I want to keep data, so you won't apply the NOT condition at the end  # noqa
+# -- TODO flag for returning bool only  # noqa
 class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     """Class to enable inuitive filtering of data based on time conditions.
 
@@ -136,7 +136,11 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         pass
 
     def transform(self, X: pl.DataFrame) -> pl.DataFrame:
-        # TODO add docstring
+        """Function to transform filter a polars dataframe.
+
+        :param X: polars dataframe to filter
+        :return: filtered polars dataframe
+        """
         rule_expression = self._convert_rules_to_polars_expressions()
 
         X = X.filter(rule_expression)
@@ -146,7 +150,6 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     def _parse_time_patterns_into_rules(
         self, time_patterns: list[str]
     ) -> list:
-        # TODO add test and add example to docstring
         """Reads input time patterns and parses them into a usable format for
         rule generation later.
 
@@ -239,7 +242,6 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
                 "how": "simple"  # since no *
             }
         """
-        print(operator, duration_string)
         operator_method = (
             FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[operator]
         )
@@ -280,7 +282,10 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         return rule_metadata
 
     def _convert_rules_to_polars_expressions(self):
-        # TODO add tests and example to docstrings, also simplify code
+        """Converts defined rules into Polars expressions.
+
+        :return: overall polars expression from parsed rules
+        """
         rules = []  # list to store expressions for each rule
         for rule_metadata in self.filtering_rules:
             rule_expressions = []
@@ -323,6 +328,18 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         return overall_rule_expression
 
     def _generate_simple_condition(self, unit, value, operator):
+        """Function to generate a simple filtering condition.
+
+        :param unit: unit of time with a corresponding Polars method, e.g. "d"
+        :param value: value to use for filtering
+        :param operator: Polars operator to use, e.g. "lt" (less than)
+        :return: a Polars expression of the condition described applied
+            to the time column
+
+        Example:
+            str(_generate_simple_condition("h", 1, "lt"))
+            >>> "[(col("date").dt.hour()) < (dyn int: 1)]"
+        """
         # TODO add tests and example in docstring
         return getattr(
             getattr(
@@ -333,7 +350,18 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         )(value)
 
     def _generate_cascade_condition(self, unit, value, operator):
-        # TODO add tests and example in docstirng
+        """Generates a cascade condition. E.g. makes sure that >01:00 (%H:%M)
+        doesn't just mean >1 hour, but also means >01:XX.
+
+        :param unit: unit of time with a corresponding Polars method, e.g. "d"
+        :param value: value to use for filtering
+        :param operator: Polars operator to use, e.g. "lt" (less than)
+        :return: a Polars expression of the condition described applied to the time column
+
+        Example:
+            str(_generate_cascade_condition("d", 1, "gt"))  # will search for hour, minute, second, ms, us and ns  # noqa
+            >>> "[([([([([([([([(col("date").dt.nanosecond()) > (dyn int: 0)]) | ([(col("date").dt.hour()) > (dyn int: 0)])]) | ([(col("date").dt.minute()) > (dyn int: 0)])]) | ([(col("date").dt.second()) > (dyn int: 0)])]) | ([(col("date").dt.millisecond()) > (dyn int: 0)])]) | ([(col("date").dt.microsecond()) > (dyn int: 0)])]) & ([(col("date").dt.day()) == (dyn int: 1)])]) | ([(col("date").dt.day()) > (dyn int: 1)])]"  # noqa
+        """
         simple_condition = self._generate_simple_condition(
             unit, value, operator
         )
@@ -372,19 +400,6 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         overall_condition = generate_polars_condition(all_conditions, "or_")
 
         return overall_condition
-
-
-extracted = FilterDataBasedOnTime._parse_time_pattern(None, "==6d<6h6s")
-md = []
-print(extracted)
-for pattern, operator in zip(extracted[0], extracted[1]):  # noqa
-    f = FilterDataBasedOnTime._create_rule_metadata_from_condition(
-        None, pattern, operator
-    )
-    md.append(f)
-
-FilterDataBasedOnTime._gen
-raise Exception()
 
 
 # If no target cols provided, tries to apply to all!

@@ -8,7 +8,11 @@ from typing import Callable
 import polars as pl
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from mix_n_match.utils import PolarsDuration, detect_timeseries_frequency
+from mix_n_match.utils import (
+    PolarsDuration,
+    detect_timeseries_frequency,
+    generate_polars_condition,
+)
 
 logger = logging.getLogger(__file__)
 
@@ -63,14 +67,6 @@ SUPPORTED_RESAMPLING_OPERATIONS = {
 # will need to modify code!
 
 
-def generate_polars_condition(expressions, operator):
-    final_expression = expressions.pop()
-    for expression in expressions:
-        final_expression = getattr(final_expression, operator)(expression)
-
-    return final_expression
-
-
 # -- mapping to store each units of time and their immediate child
 POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
     "y": {"next": "mo", "start": 1},
@@ -85,6 +81,9 @@ POLARS_DURATIONS_TO_IMMEDIATE_CHILD_MAPPING = {
 }
 
 
+# -- add support for native "weekend condition, e.g. custom method where weekday in (6,7) and optional support for changing default weekend"  # noqa
+# -- add "keep" strategy, e.g. I want to keep data, so you won't apply the NOT condition at the end  # noqa
+# -- flag for returning bool only  # noqa
 class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
     """Class to enable inuitive filtering of data based on time conditions.
 
@@ -240,12 +239,16 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
                 "how": "simple"  # since no *
             }
         """
+        print(operator, duration_string)
         operator_method = (
             FilterDataBasedOnTime.OPERATOR_TO_POLARS_METHOD_MAPPING[operator]
         )
         if duration_string.endswith("*"):
             duration_string = duration_string[:-1]
-            if operator in {"!=", "=="}:
+            if operator in {
+                "!=",
+                "==",
+            }:  # cascade doesn't really make sense for equality
                 raise NotImplementedError(
                     f"Cascade operations are currently not supported for `{operator}`"  # noqa: B950
                 )
@@ -369,6 +372,19 @@ class FilterDataBasedOnTime(BaseEstimator, TransformerMixin):
         overall_condition = generate_polars_condition(all_conditions, "or_")
 
         return overall_condition
+
+
+extracted = FilterDataBasedOnTime._parse_time_pattern(None, "==6d<6h6s")
+md = []
+print(extracted)
+for pattern, operator in zip(extracted[0], extracted[1]):  # noqa
+    f = FilterDataBasedOnTime._create_rule_metadata_from_condition(
+        None, pattern, operator
+    )
+    md.append(f)
+
+FilterDataBasedOnTime._gen
+raise Exception()
 
 
 # If no target cols provided, tries to apply to all!
@@ -769,6 +785,42 @@ class ResampleData(BaseEstimator, TransformerMixin):
 
 
 if __name__ == "__main__":
+    df = pl.DataFrame(
+        {
+            "date": [
+                # -- may 24th is a Friday, weekday
+                "2024-05-24 00:00:00",
+                "2024-05-24 06:00:00",
+                "2024-05-24 06:30:00",
+                "2024-05-24 20:00:00",
+                # -- may 25th is a Saturday, weekend
+                "2024-05-25 00:00:00",
+                "2024-05-25 06:00:00",
+                "2024-05-25 06:30:00",
+                "2024-05-25 20:00:00",
+            ]
+        }
+    ).with_columns(
+        pl.col("date").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S")
+    )
+    processor = FilterDataBasedOnTime(
+        "date",
+        time_patterns=[
+            "<6wd<6h",
+            "<6wd>=20h",
+            ">=6wd<8h>=22h",
+            ">=6wd>=22h",
+        ],
+    )
+
+    print(
+        processor.transform(df).with_columns(
+            pl.col("date").dt.weekday().alias("weekday"),
+            pl.col("date").dt.hour().alias("hour"),
+        ),
+    )
+
+    raise Exception()
     df = pl.DataFrame(
         {
             "date": [

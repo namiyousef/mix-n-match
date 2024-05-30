@@ -148,7 +148,10 @@ def detect_timeseries_frequency(
             )
 
     if how != "max":  # max returns Python literal, others return Series
-        frequency = frequency.item()
+        frequency = (
+            frequency.item()
+        )  # TODO this will fail if mode has multiple values!
+        # Need to think of how to resolve this issue
 
     return frequency.total_seconds()
 
@@ -209,3 +212,25 @@ def find_contiguous_segments(
     indices_list = indices_array.tolist()
 
     return indices_list
+
+
+def generate_polars_condition(
+    expressions: list[pl.Expr], operator: str
+) -> pl.Expr:
+    """Given a list of Polars expressions, combine them using a polars
+    operation.
+
+    :param expressions: list of polars expressions
+    :param operator: string format of polars operation, e.g. "and_" or "or_"
+    :return: a single polars expression combining the expressions in the list
+
+    Example:
+        expressions = [pl.col("value") < 10, pl.col("value") > 15]
+        str(generate_polars_condition(expressions, "or_"))
+        >>> "[([(col("value")) > (dyn int: 15)]) | ([(col("value")) < (dyn int: 10)])]"  # noqa
+    """
+    final_expression = expressions.pop()
+    for expression in expressions:
+        final_expression = getattr(final_expression, operator)(expression)
+
+    return final_expression

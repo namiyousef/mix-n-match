@@ -7,6 +7,7 @@ from mix_n_match.utils import (
     PolarsDuration,
     detect_timeseries_frequency,
     find_contiguous_segments,
+    generate_polars_condition,
 )
 
 
@@ -170,6 +171,15 @@ class TestUtils(unittest.TestCase):
         )
 
         assert frequency == 15 * 60  # 15 mins
+
+    def test_generate_polars_condition(self):
+        left = pl.col("value") > 10
+        right = pl.col("value") < 15
+
+        expressions = [left, right]
+        final_expression = generate_polars_condition(expressions, "or_")
+
+        assert str(final_expression) == str(right.or_(left))
 
 
 if __name__ == "__main__":
